@@ -1,6 +1,6 @@
 # Testing StarCom (early prototype)
 
-StarCom is built with AI, openly (see README.md). This is a very early command-line prototype for testing text chat between two friends. It has no window yet.
+StarCom is built with AI, openly (see README.md). This is a very early command-line prototype for testing text chat between two friends, on Windows or Linux. It has no window yet.
 
 ## What you get
 - `starcom.exe`: the program (Windows, about 450 KB, nothing to install).
@@ -40,6 +40,19 @@ Add this line to `starcom.conf`:
     hideip=1
 
 StarCom then never connects directly: your note carries no addresses of yours, and everything goes through the relay. Your friend cannot see your IP address. The relay still sees both addresses, never the content. It can be a little slower.
+
+## Linux
+- `starcom`: the Linux program (64-bit x86, about 1.3 MB, one file, nothing to install).
+- It needs a recent Linux: Ubuntu 23.10 or newer, Debian 13, Fedora 39 or newer (glibc 2.38+). On older systems, build it from the source instead: install a C++ compiler (for example `sudo apt install g++`), then run `sh build.sh` in the source folder; the program appears as `build/starcom`.
+- In a terminal in the folder with `starcom` and `starcom.conf`:
+
+      chmod +x starcom
+      ./starcom id
+      ./starcom chat <your friend's code>
+
+- Everything else works the same as on Windows. `identity.key` is created readable only by you.
+- Video encoder probing uses VA-API if it is installed; without it, `probe` simply reports none.
+- macOS is not supported yet.
 
 ## Other commands
 - `starcom probe`: shows which video encoders your hardware has (for future video calls).
