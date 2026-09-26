@@ -20,3 +20,8 @@ StarCom collects nothing about its users. There are no accounts, no analytics an
 Note on the capability list: it includes the names of your video encoders (for example the brand of your graphics card). That is a hardware fingerprint. Only the peer you connect to can read it; later versions will send only the codec tiers, without names, to anyone who is not on your friend list.
 
 Your secret key never leaves your device.
+
+## Chat messages
+- Messages you type are sent only to the one peer you are chatting with, encrypted end to end inside the session (ChaCha20-Poly1305). No server sees or relays them in this version.
+- **Messages are never stored.** Not on your device, not on the peer's device, not anywhere. There is no chat history file; when the program closes, the conversation is gone.
+- Each message carries a sequence number so it arrives exactly once and in order; the numbers are inside the encryption.

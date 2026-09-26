@@ -9,4 +9,6 @@ Every network connection StarCom makes is listed here: to whom, when, why, and w
 
 What the other side learns: a peer you handshake with sees your public IP address. Anyone watching the network sees two IPs exchanging encrypted packets, but not what is inside.
 
+| Chat | The peer you completed the handshake with | While the chat is open | To carry your messages | Encrypted packets: your messages, acknowledgements, and a small keepalive about every 25 seconds so home routers keep the connection open. If the peer is silent for 75 seconds the chat ends. |
+
 StarCom makes no other connections: no update checks, no telemetry, no analytics.

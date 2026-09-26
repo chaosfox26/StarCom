@@ -1,3 +1,5 @@
+#include "chat.h"
+#include "console.h"
 #include "handshake.h"
 #include "hwprobe.h"
 #include "identity.h"
@@ -15,7 +17,7 @@ static const char* CONF_FILE = "starcom.conf";
 
 static int usage(){
     std::printf(
-        "StarCom sprint 1\n"
+        "StarCom sprint 2\n"
         "  starcom id                          create or show your identity and friend code\n"
         "  starcom probe                       show hardware video encoders and the capability JSON\n"
         "  starcom seed [name]                 look up the seed name (default: seed= in starcom.conf)\n"
@@ -70,6 +72,36 @@ static int cmdSeed(const std::string& arg){
     return 0;
 }
 
+static std::string safeText(const std::string& in){
+    std::string o;
+    for(size_t i = 0; i < in.size(); i++){
+        unsigned char c = (unsigned char)in[i];
+        if(c == 0x7F || (c < 0x20 && c != '\t')){ o += '?'; continue; }
+        if(c == 0xC2 && i + 1 < in.size() && (unsigned char)in[i + 1] >= 0x80 && (unsigned char)in[i + 1] <= 0x9F){ o += '?'; i++; continue; }
+        o += (char)c;
+    }
+    return o;
+}
+
+static int chatWith(UdpSocket& s, Session& ses){
+    std::string tag = friendCode(ses.peerPub).substr(0, 9);
+    consolePrint("\nChat open with " + tag + ". Type a message and press Enter. /quit to leave.\n");
+    LineInput input;
+    input.start();
+    ChatIO io;
+    io.nextOutgoing = [&input](std::string& line){
+        if(input.next(line)) return true;
+        if(input.closed()){ line = "/quit"; return true; }
+        return false;
+    };
+    io.onIncoming = [&tag](const std::string& text){ consolePrint("[" + tag + "] " + safeText(text) + "\n"); };
+    io.onStatus = [](const std::string& m){ consolePrint("* " + m + "\n"); };
+    std::string err;
+    bool ok = runChat(s, ses, io, err);
+    if(!ok) consolePrint("* chat ended: " + err + "\n");
+    return ok ? 0 : 1;
+}
+
 static void report(const Session& s, const std::string& myCaps, const std::string& peerCaps){
     std::printf("Handshake complete with %s\n  peer friend code: %s\n  session id: local %016llx / peer %016llx\n  peer capabilities: %s\n  negotiated video codec: %s\n",
         s.peer.str().c_str(), friendCode(s.peerPub).c_str(), (unsigned long long)s.id, (unsigned long long)s.peerId, peerCaps.c_str(), negotiate(myCaps, peerCaps).c_str());
@@ -90,8 +122,9 @@ static int cmdListen(const std::string& portArg){
     identityWipe(id);
     if(!ok){ std::fprintf(stderr, "handshake failed: %s\n", err.c_str()); return 1; }
     report(ses, myCaps, peerCaps);
+    int rc = chatWith(s, ses);
     sessionWipe(ses);
-    return 0;
+    return rc;
 }
 
 static int cmdConnect(const std::string& host, const std::string& portArg, const std::string& code){
@@ -115,8 +148,9 @@ static int cmdConnect(const std::string& host, const std::string& portArg, const
         if(hsInitiate(s, a, id, peerPub, myCaps, ses, peerCaps, err, 10000)){
             identityWipe(id);
             report(ses, myCaps, peerCaps);
+            int rc = chatWith(s, ses);
             sessionWipe(ses);
-            return 0;
+            return rc;
         }
         std::fprintf(stderr, "  failed: %s\n", err.c_str());
     }
@@ -126,6 +160,7 @@ static int cmdConnect(const std::string& host, const std::string& portArg, const
 
 int main(int argc, char** argv){
     if(argc < 2) return usage();
+    consoleInit();
     if(!netInit()){ std::fprintf(stderr, "network init failed\n"); return 1; }
     std::string cmd = argv[1];
     int rc;
