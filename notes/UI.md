@@ -53,6 +53,7 @@ Status: design draft.
    - This is listed in DATA.md.
 3. Click a friend to open a chat. Connecting (meeting point, direct or relay) happens in the background, with status in the header.
 4. Messages appear grouped Discord-style. The history lives only in memory while the window is open, as in the command-line version.
+   - Typing `/quit` as a message leaves the chat, as in the command-line version; your friend sees that you left. Clicking the friend again reconnects.
 5. Call button: voice calls in the window arrive with the engine update (until then it says so).
 6. Network Health panel shows live numbers from the engine.
 

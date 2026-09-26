@@ -25,7 +25,7 @@ const char* kIdFile = "identity.key";
 const char* kConf = "starcom.conf";
 const char* kFriends = "friends.txt";
 
-enum Kind { kStatus = 0, kIncoming = 1, kDirect = 2, kRelay = 3, kEnded = 4 };
+enum Kind { kStatus = 0, kIncoming = 1, kDirect = 2, kRelay = 3, kEnded = 4, kPeerLeft = 5 };
 
 std::string clockNow(){
     std::time_t t = std::time(nullptr);
@@ -142,6 +142,7 @@ void NetHub::open(size_t idx){
 
 void NetHub::send(size_t idx, const std::string& text){
     if(idx >= friends_.size() || !workers_[idx] || workers_[idx]->done) return;
+    if(text == "/quit"){ close(idx); return; }
     { std::lock_guard<std::mutex> lk(workers_[idx]->mu); workers_[idx]->out.push_back(text); }
     ChatLine l;
     l.mine = true;
@@ -199,7 +200,8 @@ void NetHub::run(size_t idx, std::shared_ptr<Worker> w){
     bool clean = runChat(s, ses, io, err);
     sessionWipe(ses);
     w->notice.send();
-    post(idx, kEnded, clean ? "Chat closed." : err);
+    if(clean && !w->quit) post(idx, kPeerLeft, "");
+    else post(idx, kEnded, clean ? "You left the chat." : err);
     w->done = true;
 }
 
@@ -221,12 +223,13 @@ bool NetHub::pump(){
             break; }
         case kDirect: f.state = LinkState::Direct; f.status = "Connected directly. Your friend can see your IP address."; break;
         case kRelay: f.state = LinkState::Relay; f.status = "Connected through the relay. Your friend cannot see your IP address."; break;
-        case kEnded: {
+        case kEnded:
+        case kPeerLeft: {
             f.state = LinkState::Ended;
-            f.status = e.text;
+            f.status = e.kind == kPeerLeft ? f.nick + " left the chat." : e.text;
             ChatLine l;
             l.system = true;
-            l.text = e.text;
+            l.text = f.status;
             l.time = clockNow();
             f.lines.push_back(l);
             break; }

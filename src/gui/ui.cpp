@@ -368,7 +368,7 @@ void StarUI::act(int a){
         Friend& f = hub_.friends()[(size_t)selected_];
         f.unread = 0;
         scroll_ = 0;
-        if(f.state == LinkState::Idle) hub_.open((size_t)selected_);
+        if(f.state == LinkState::Idle || f.state == LinkState::Ended) hub_.open((size_t)selected_);
         focus_ = FMessage;
         return;
     }
