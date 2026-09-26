@@ -19,6 +19,12 @@ StarCom is built with AI, openly (see README.md). This early prototype does dire
 5. To call, click the phone at the top of the chat. Your friend clicks Accept. Use headphones: there is no echo cancellation yet.
    - The call panel has Mute, Deafen and Disconnect.
 6. The gear at the bottom left opens Settings: your @name, your friend code, and where StarCom keeps its files.
+7. **Hubs** (group spaces):
+   - Click the + on the left ("Add Server"), type a name and click Create. You are the hub's owner.
+   - Click "..." next to the hub's name, then Invite people, then Copy. Send the code to your friend privately. Keep StarCom open until they have joined.
+   - Your friend clicks the + on the left, pastes the code and clicks Join.
+   - Click a # channel to talk. Click a voice channel to join it; DISCONNECT in the voice panel leaves it.
+   - Hub settings (in the "..." menu) adds channels, makes admins, kicks and bans.
 
 ## Command line (Windows and Linux)
 - Choose your @name once:
@@ -36,6 +42,25 @@ StarCom is built with AI, openly (see README.md). This early prototype does dire
   - `/mute` and `/deafen`;
   - `/quit` to leave.
 - `starcom call @skye` does the same as `chat`, and rings straight away.
+
+## Hubs from the command line (Windows and Linux)
+- Open your hubs:
+
+      starcom hub
+
+- Make a hub and invite people:
+  - `/create Our Hub` creates it; you are its owner.
+  - `/invite` prints an invite code (it works for 24 hours and for 10 people). Send it privately.
+  - Stay online while people join with it.
+- Join a hub: `/join SCH1-...@name` (paste the whole code).
+- Talk: anything you type goes to the current channel.
+  - `/hubs` lists your hubs and channels.
+  - `/use 2` switches hub.
+  - `/ch random` switches channel.
+  - `/who` shows who is online.
+- Voice: `/vc` joins the voice channel (use headphones), then `/mute`, `/deafen` and `/novc`.
+- Owner and admins: `/kick @name`, `/ban @name`. Owner only: `/admin @name`, `/unadmin @name`, `/addch name` (add ` voice` for a voice channel), `/bans` to list bans and `/unban <number>` to lift one.
+- `/leave` leaves the current hub; `/quit` closes StarCom. `/help` lists everything.
 
 On Linux, run `chmod +x starcom` once, then use `./starcom` in place of `starcom`.
 

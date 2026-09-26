@@ -1,6 +1,7 @@
 #pragma once
 #include <cstddef>
 #include <cstdint>
+#include "noise.h"
 #include "platform_net.h"
 
 namespace sc {
@@ -12,6 +13,8 @@ constexpr uint8_t kWireVersion = 1;
 constexpr size_t kHeaderLen = 8;
 constexpr size_t kDataHeaderLen = kHeaderLen + 16;
 constexpr size_t kMaxPacket = 1400;
+constexpr size_t kLinkFrameOverhead = 9;
+constexpr size_t kMaxCircuitInner = kMaxPacket - kDataHeaderLen - kTagLen - kLinkFrameOverhead;
 extern const uint8_t kPrologue[];
 extern const size_t kPrologueLen;
 

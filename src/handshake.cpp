@@ -178,6 +178,7 @@ bool hsInitiate(UdpSocket& s, const Addr& to, const Identity& me, const uint8_t 
         while(msLeft(retry) > 0){
             Addr from;
             int r = s.recvFrom(in, sizeof in, from, msLeft(retry));
+            if(r < 0 && s.isChannel()){ err = "the connection was closed"; return false; }
             if(r <= 0) continue;
             if(!dial.finish(in, (size_t)r, out, peerCaps)) continue;
             out.peer = from;
@@ -207,6 +208,7 @@ bool hsRespond(UdpSocket& s, const Identity& me, const std::string& myCaps, Sess
     while(!done && msLeft(deadline) > 0){
         Addr from;
         int r = s.recvFrom(in, sizeof in, from, msLeft(deadline) < 250 ? msLeft(deadline) : 250);
+        if(r < 0 && s.isChannel()) break;
         if(r <= 0) continue;
         Header h;
         if(!readHeader(in, (size_t)r, h)) continue;

@@ -12,6 +12,7 @@ Every network connection StarCom makes is listed here: to whom, when, why, and w
 | Your @name record | Star DNS (the StarCom network), through your relay | When StarCom starts, every 30 minutes, and when your relay changes | So friends can find you by your @name | A record signed with your key: your @name, your public key, your relay's address and key, and an expiry time. **It holds no IP address of yours.** The relay stores it in Star DNS on your behalf, so no Star DNS node ever sees your IP next to your @name. |
 | @name lookups | Star DNS, through your relay | When you add a friend, or open a chat with one | To find which relay can reach your friend | The @name you are looking for (inside your encrypted link). Your relay searches Star DNS for you. You check the answer's signature yourself. |
 | Conversations (chat and voice) | Your friend, through your relay and your friend's relay | While a chat or call is open | To carry messages and voice | Packets encrypted end to end between you and your friend (Noise IK, ChaCha20-Poly1305). Each relay passes them on without being able to read them. |
+| Hub traffic | About 4 other members of each hub you are in (your mesh neighbours), the members in your voice channel, and whoever joins with your invite, each through the relays | While StarCom is open and you are in a hub | To pass hub messages, presence, voice, the hub's layout and keys, and joins | The same end-to-end sessions as conversations: one per pair of people, shared by a direct message and every hub the two of you are in. A session nothing uses closes after 5 minutes. Each mesh neighbour also gets a short version check (about 110 bytes) every 30 seconds, so missed updates heal. |
 
 ## Who learns what, plainly
 - **Your friend never learns your IP address,** and you never learn theirs. Each of you sees only your own relay. Your friend learns your @name and your friend code (your public key), as they must in order to know it is you.
@@ -19,6 +20,7 @@ Every network connection StarCom makes is listed here: to whom, when, why, and w
 - **Your friend's relay** sees your relay's address, never yours.
 - **When you and your friend use the same relay** (today, while the network has one relay), that one relay sees both of your addresses. Planned: as more relays join, StarCom will prefer a relay different from your friend's, so that no single relay sees both ends.
 - **Star DNS nodes** see the address of the relay that stores or looks up a record, never yours.
+- **In a hub,** members know who wrote each message (messages are signed and names are shown), who is online, and who is in which voice channel. **They never learn anyone's IP address.** Relays and mesh neighbours cannot tell which member's connection a message started from: hub messages travel by Dandelion++ (see HUBS.md). Nobody outside a hub learns that it exists.
 - **Anyone watching your internet connection** sees encrypted packets going to your relay, and nothing else.
 
 StarCom makes no other connections: no update checks, no telemetry, no analytics.

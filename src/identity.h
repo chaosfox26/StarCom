@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace sc {
 
@@ -14,5 +15,7 @@ bool identityLoadOrCreate(const std::string& path, Identity& id, bool& created, 
 std::string friendCode(const uint8_t pub[32]);
 bool parseFriendCode(const std::string& code, uint8_t pub[32]);
 void identityWipe(Identity& id);
+std::string base32Encode(const uint8_t* p, size_t n);
+bool base32Decode(const std::string& s, std::vector<uint8_t>& out);
 
 }

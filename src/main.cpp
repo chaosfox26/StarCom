@@ -7,6 +7,7 @@
 #define NOMINMAX
 #include <windows.h>
 #endif
+#include "hubcli.h"
 #include "hwprobe.h"
 #include "engine.h"
 #include "identity.h"
@@ -44,6 +45,7 @@ static int usage(){
         "  starcom name <name>        choose your @name (friends find you by it)\n"
         "  starcom chat @name         chat with a friend; neither of you can see the other's IP address\n"
         "  starcom call @name         the same, and ring your friend straight away (use headphones)\n"
+        "  starcom hub                your hubs in the console: create, join, talk, voice channels\n"
         "  starcom id                 show your friend code\n"
         "  starcom probe              show your hardware video encoders\n"
         "  starcom seed               look up this copy's network entry points\n"
@@ -343,6 +345,7 @@ int main(int argc, char** argv){
     else if(cmd == "name" && argc > 2) rc = cmdName(argv[2]);
     else if(cmd == "chat" && argc > 2) rc = cmdChatName(argv[2], false);
     else if(cmd == "call" && argc > 2) rc = cmdChatName(argv[2], true);
+    else if(cmd == "hub") rc = runHubConsole();
     else if(cmd == "relay" && argc > 2) rc = runRelay((uint16_t)std::atoi(argv[2]));
     else rc = usage();
     netShutdown();

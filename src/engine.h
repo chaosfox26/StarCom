@@ -36,7 +36,7 @@ public:
     int voiceTargetKbps() const;
     int voiceFrameMs() const;
     static constexpr size_t kFrameOverhead = 5;
-    static constexpr size_t kMaxPayload = kMaxPacket - kDataHeaderLen - kTagLen - kFrameOverhead;
+    static constexpr size_t kMaxPayload = kMaxCircuitInner - kDataHeaderLen - kTagLen - kFrameOverhead;
 
 private:
     struct Out {
@@ -47,6 +47,7 @@ private:
     Session& ses_;
     mutable std::mutex mu_;
     std::deque<Out> q_[4];
+    std::recursive_mutex rxMu_;
     std::function<void(Lane, const uint8_t*, size_t)> rx_[8];
     double tokens_ = 0;
     uint32_t lastRefillMs_ = 0;

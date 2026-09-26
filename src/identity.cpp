@@ -86,7 +86,7 @@ bool identityLoadOrCreate(const std::string& path, Identity& id, bool& created, 
     return true;
 }
 
-static std::string base32(const uint8_t* p, size_t n){
+std::string base32Encode(const uint8_t* p, size_t n){
     std::string s;
     uint32_t buf = 0;
     int bits = 0;
@@ -99,7 +99,7 @@ static std::string base32(const uint8_t* p, size_t n){
     return s;
 }
 
-static bool unbase32(const std::string& s, std::vector<uint8_t>& out){
+bool base32Decode(const std::string& s, std::vector<uint8_t>& out){
     uint32_t buf = 0;
     int bits = 0;
     for(char c : s){
@@ -121,7 +121,7 @@ std::string friendCode(const uint8_t pub[32]){
     crypto_blake2b(h, sizeof h, pub, 32);
     body[32] = h[0];
     body[33] = h[1];
-    std::string b = base32(body, sizeof body);
+    std::string b = base32Encode(body, sizeof body);
     std::string out = "SC1";
     for(size_t i = 0; i < b.size(); i += 5) out += "-" + b.substr(i, 5);
     return out;
@@ -130,7 +130,7 @@ std::string friendCode(const uint8_t pub[32]){
 bool parseFriendCode(const std::string& code, uint8_t pub[32]){
     if(code.size() < 4 || (code.compare(0, 4, "SC1-") != 0 && code.compare(0, 4, "sc1-") != 0)) return false;
     std::vector<uint8_t> raw;
-    if(!unbase32(code.substr(4), raw) || raw.size() != 34) return false;
+    if(!base32Decode(code.substr(4), raw) || raw.size() != 34) return false;
     uint8_t h[32];
     crypto_blake2b(h, sizeof h, raw.data(), 32);
     if(h[0] != raw[32] || h[1] != raw[33]) return false;

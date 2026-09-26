@@ -44,66 +44,78 @@ struct Pacer {
 
 class Chat {
 public:
-    Chat(Engine& e, ChatIO& io) : e_(e), io_(io) {}
-
-    bool run(std::string& err){
+    Chat(Engine& e, ChatIO& io) : e_(e), io_(io) {
         e_.onReceive(kChanChat, [this](Lane lane, const uint8_t* p, size_t n){
             if(lane == Lane::Signal && !handle(p, n)) peerLeft_ = true;
         });
-        for(;;){
-            std::string line;
-            while(!closing_ && queue_.size() < kMaxQueued && io_.nextOutgoing && io_.nextOutgoing(line)){
-                if(line.empty()) continue;
-                if(line == "/quit"){
-                    closing_ = true;
-                    closeAt_ = Clock::now() + std::chrono::milliseconds(2000);
-                    break;
-                }
-                if(line.size() > kMaxChatText){
-                    status("message too long (" + std::to_string(line.size()) + " bytes, limit " + std::to_string(kMaxChatText) + ")");
-                    continue;
-                }
-                queue_.push_back(line);
+    }
+
+    ~Chat(){
+        e_.onReceive(kChanChat, nullptr);
+    }
+
+    void tick(){
+        if(done_) return;
+        if(peerLeft_){
+            done_ = true;
+            return;
+        }
+        std::string line;
+        while(!closing_ && queue_.size() < kMaxQueued && io_.nextOutgoing && io_.nextOutgoing(line)){
+            if(line.empty()) continue;
+            if(line == "/quit"){
+                closing_ = true;
+                closeAt_ = Clock::now() + std::chrono::milliseconds(2000);
+                break;
             }
-            if(closing_ && ((queue_.empty() && inFlight_.empty()) || Clock::now() >= closeAt_)){
-                if(!queue_.empty() || !inFlight_.empty()) status(std::to_string(queue_.size() + inFlight_.size()) + " message(s) were not confirmed before leaving");
-                sendControl(kClose, 0);
-                sendControl(kClose, 0);
-                e_.flush(500);
-                status("you left the chat");
-                return true;
+            if(line.size() > kMaxChatText){
+                status("message too long (" + std::to_string(line.size()) + " bytes, limit " + std::to_string(kMaxChatText) + ")");
+                continue;
             }
-            while(!queue_.empty() && inFlight_.size() < kMaxInFlight && pacer_.take()){
-                Pending p;
-                p.seq = nextSeq_++;
-                p.text = queue_.front();
-                queue_.pop_front();
-                p.due = Clock::now();
-                inFlight_.push_back(p);
+            queue_.push_back(line);
+        }
+        if(closing_ && ((queue_.empty() && inFlight_.empty()) || Clock::now() >= closeAt_)){
+            if(!queue_.empty() || !inFlight_.empty()) status(std::to_string(queue_.size() + inFlight_.size()) + " message(s) were not confirmed before leaving");
+            sendControl(kClose, 0);
+            sendControl(kClose, 0);
+            status("you left the chat");
+            done_ = true;
+            return;
+        }
+        while(!queue_.empty() && inFlight_.size() < kMaxInFlight && pacer_.take()){
+            Pending p;
+            p.seq = nextSeq_++;
+            p.text = queue_.front();
+            queue_.pop_front();
+            p.due = Clock::now();
+            inFlight_.push_back(p);
+        }
+        for(Pending& p : inFlight_){
+            if(Clock::now() < p.due) continue;
+            if(p.tries >= kMaxTries){
+                err_ = "the peer stopped acknowledging messages";
+                failed_ = true;
+                done_ = true;
+                return;
             }
-            for(Pending& p : inFlight_){
-                if(Clock::now() < p.due) continue;
-                if(p.tries >= kMaxTries){
-                    err = "the peer stopped acknowledging messages";
-                    return false;
-                }
-                sendText(p);
-                p.tries++;
-                p.due = Clock::now() + std::chrono::milliseconds(p.rto);
-                if(p.rto < kMaxRtoMs) p.rto *= 2;
-            }
-            if(!e_.poll(50, err)) return false;
-            if(peerLeft_){
-                e_.flush(500);
-                return true;
-            }
+            sendText(p);
+            p.tries++;
+            p.due = Clock::now() + std::chrono::milliseconds(p.rto);
+            if(p.rto < kMaxRtoMs) p.rto *= 2;
         }
     }
+
+    bool ended() const { return done_; }
+    bool failed() const { return failed_; }
+    const std::string& error() const { return err_; }
 
 private:
     Engine& e_;
     ChatIO& io_;
     bool peerLeft_ = false;
+    bool done_ = false;
+    bool failed_ = false;
+    std::string err_;
     std::deque<std::string> queue_;
     std::deque<Pending> inFlight_;
     std::map<uint64_t, std::string> early_;
@@ -168,9 +180,32 @@ private:
 
 }
 
+struct ChatModule::Impl {
+    Chat chat;
+    Impl(Engine& e, ChatIO& io) : chat(e, io) {}
+};
+
+ChatModule::ChatModule(Engine& e, ChatIO& io) : p_(new Impl(e, io)) {}
+ChatModule::~ChatModule(){ delete p_; }
+void ChatModule::tick(){ p_->chat.tick(); }
+bool ChatModule::ended() const { return p_->chat.ended(); }
+bool ChatModule::failed() const { return p_->chat.failed(); }
+const std::string& ChatModule::error() const { return p_->chat.error(); }
+
 bool runChatWith(Engine& e, ChatIO& io, std::string& err){
-    Chat chat(e, io);
-    return chat.run(err);
+    ChatModule m(e, io);
+    for(;;){
+        m.tick();
+        if(m.ended()){
+            if(m.failed()){
+                err = m.error();
+                return false;
+            }
+            e.flush(500);
+            return true;
+        }
+        if(!e.poll(50, err)) return false;
+    }
 }
 
 bool runChat(UdpSocket& s, Session& ses, ChatIO& io, std::string& err){

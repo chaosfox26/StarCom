@@ -1,4 +1,5 @@
 #include "paths.h"
+#include <cstdio>
 #include <cstdlib>
 
 #ifdef _WIN32
@@ -62,6 +63,24 @@ bool enterDataDir(std::string& where, std::string& err){
     if(::chdir(dir.c_str()) != 0){ err = "cannot open " + dir; return false; }
     where = dir;
     return true;
+}
+#endif
+
+#ifdef _WIN32
+static std::wstring widen(const std::string& s){
+    if(s.empty()) return std::wstring();
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+    std::wstring w((size_t)n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
+    return w;
+}
+
+bool replaceFile(const std::string& tmp, const std::string& dest){
+    return MoveFileExW(widen(tmp).c_str(), widen(dest).c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+}
+#else
+bool replaceFile(const std::string& tmp, const std::string& dest){
+    return std::rename(tmp.c_str(), dest.c_str()) == 0;
 }
 #endif
 

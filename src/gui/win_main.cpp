@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 #include "canvas.h"
-#include "nethub.h"
+#include "../nethub.h"
 #include "ui.h"
 #include "gui.h"
 #include "../platform_net.h"

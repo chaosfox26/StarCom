@@ -109,6 +109,7 @@ bool Engine::send(Lane lane, uint8_t channel, const uint8_t* p, size_t n){
 }
 
 void Engine::onReceive(uint8_t channel, std::function<void(Lane, const uint8_t*, size_t)> fn){
+    std::lock_guard<std::recursive_mutex> g(rxMu_);
     if(channel < 8) rx_[channel] = std::move(fn);
 }
 
@@ -250,7 +251,10 @@ bool Engine::poll(int timeoutMs, std::string& err){
         if(ok && n >= kFrameOverhead){
             uint8_t ch = plain[0];
             if(ch == kChanEngine) handleReport(plain + kFrameOverhead, n - kFrameOverhead, now);
-            else if(ch < 8 && rx_[ch]) rx_[ch](lane, plain + kFrameOverhead, n - kFrameOverhead);
+            else if(ch < 8){
+                std::lock_guard<std::recursive_mutex> g(rxMu_);
+                if(rx_[ch]) rx_[ch](lane, plain + kFrameOverhead, n - kFrameOverhead);
+            }
         }
     }
     {
