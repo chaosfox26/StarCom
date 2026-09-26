@@ -1,4 +1,5 @@
 #include "relay.h"
+#include "noise.h"
 #include "../third_party/monocypher/monocypher.h"
 #include <algorithm>
 #include <chrono>
@@ -20,6 +21,14 @@ const size_t kMaxStamps = 20000;
 const size_t kMaxPeers = 256;
 const int kMaxNewPeersPerMinute = 4;
 const size_t kMaxRates = 8192;
+const uint32_t kBridgeConfirmMs = 2000;
+const uint32_t kBridgeAvoidMs = 600000;
+const uint32_t kBridgeIdleMs = 600000;
+const uint32_t kBridgeShareWindowMs = 600000;
+const uint32_t kEnvSeenMs = 600000;
+const uint32_t kEnvelopeSkewSec = 60;
+const size_t kMaxBridges = 256;
+const double kBridgeFloorKbps = 64.0;
 
 uint32_t nowMs(){
     return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -53,6 +62,9 @@ uint64_t random64(){
 }
 
 RelayServer::RelayServer(UdpSocket& s, int socketFamily, const Identity& me, const std::vector<Addr>& dhtSeeds) : s_(s), family_(socketFamily), me_(me), caps_("{}"), dhtSeeds_(dhtSeeds){
+    StaticKey sk;
+    if(staticFromSeed(me_.seed, sk)) std::memcpy(xSec_, sk.sec, 32);
+    crypto_wipe(&sk, sizeof sk);
     worker_ = std::thread([this]{ workerLoop(); });
 }
 
@@ -64,7 +76,72 @@ RelayServer::~RelayServer(){
     jobCv_.notify_all();
     if(worker_.joinable()) worker_.join();
     for(auto& kv : conns_) sessionWipe(kv.second.ses);
+    for(auto& kv : pendingBridge_) crypto_wipe(kv.second.owner, 32);
+    crypto_wipe(xSec_, sizeof xSec_);
     identityWipe(me_);
+}
+
+size_t RelayServer::bridges() const {
+    size_t n = 0;
+    for(auto& kv : conns_) if(kv.second.bridge) n++;
+    return n;
+}
+
+bool RelayServer::sealEnvelope(const uint8_t yEdPub[32], const uint8_t owner[32], uint8_t out[kEnvelopeLen]){
+    uint8_t eSec[32], ePub[32], yX[32], shared[32], k[32], plain[48], nonce[24] = {0};
+    sysRandom(eSec, 32);
+    crypto_x25519_public_key(ePub, eSec);
+    x25519FromEdPub(yEdPub, yX);
+    crypto_x25519(shared, eSec, yX);
+    uint8_t acc = 0;
+    for(uint8_t b : shared) acc |= b;
+    static const char label[] = "starcom-bridge";
+    crypto_blake2b_ctx ctx;
+    crypto_blake2b_init(&ctx, 32);
+    crypto_blake2b_update(&ctx, (const uint8_t*)label, sizeof label - 1);
+    crypto_blake2b_update(&ctx, shared, 32);
+    crypto_blake2b_update(&ctx, ePub, 32);
+    crypto_blake2b_update(&ctx, yEdPub, 32);
+    crypto_blake2b_final(&ctx, k);
+    std::memcpy(plain, owner, 32);
+    putU32(plain + 32, wallSeconds());
+    sysRandom(plain + 36, 12);
+    std::memcpy(out, ePub, 32);
+    crypto_aead_lock(out + 32, out + 80, k, nonce, nullptr, 0, plain, 48);
+    crypto_wipe(eSec, 32);
+    crypto_wipe(shared, 32);
+    crypto_wipe(k, 32);
+    crypto_wipe(plain, 48);
+    return acc != 0;
+}
+
+bool RelayServer::openEnvelope(const uint8_t env[kEnvelopeLen], uint8_t owner[32]){
+    uint8_t shared[32], k[32], plain[48], nonce[24] = {0};
+    crypto_x25519(shared, xSec_, env);
+    uint8_t acc = 0;
+    for(uint8_t b : shared) acc |= b;
+    if(acc == 0){
+        crypto_wipe(shared, 32);
+        return false;
+    }
+    static const char label[] = "starcom-bridge";
+    crypto_blake2b_ctx ctx;
+    crypto_blake2b_init(&ctx, 32);
+    crypto_blake2b_update(&ctx, (const uint8_t*)label, sizeof label - 1);
+    crypto_blake2b_update(&ctx, shared, 32);
+    crypto_blake2b_update(&ctx, env, 32);
+    crypto_blake2b_update(&ctx, me_.pub, 32);
+    crypto_blake2b_final(&ctx, k);
+    bool ok = crypto_aead_unlock(plain, env + 80, k, nonce, nullptr, 0, env + 32, 48) == 0;
+    if(ok){
+        uint32_t ts = getU32(plain + 32), now = wallSeconds();
+        ok = (ts > now ? ts - now : now - ts) <= kEnvelopeSkewSec;
+        if(ok) std::memcpy(owner, plain, 32);
+    }
+    crypto_wipe(shared, 32);
+    crypto_wipe(k, 32);
+    crypto_wipe(plain, 48);
+    return ok;
 }
 
 bool RelayServer::allow(const Addr& a){
@@ -176,6 +253,7 @@ void RelayServer::openLocal(uint64_t fromConn, uint64_t fromCirc, const std::str
 }
 
 void RelayServer::dropCircuit(uint64_t connId, uint64_t circ, bool notifyOther){
+    forgetPending(connId, circ);
     auto cit = conns_.find(connId);
     if(cit != conns_.end() && cit->second.dialed){
         auto r = remoteIn_.find(remoteKey(cit->second.peerKey, circ));
@@ -284,12 +362,279 @@ void RelayServer::replaceLink(uint64_t oldId, uint64_t newId){
     for(auto& kv : remoteIn_) if(kv.second.first == oldId) kv.second.first = newId;
 }
 
+void RelayServer::routeOpen(uint64_t connId, uint64_t circ, const Addr& relay, const uint8_t relayPub[32], const uint8_t owner[32]){
+    auto cit = conns_.find(connId);
+    if(cit == conns_.end()) return;
+    Conn& c = cit->second;
+    uint32_t now = nowMs();
+    if(crypto_verify32(relayPub, me_.pub) == 0){
+        openLocal(connId, circ, std::string(), owner);
+        return;
+    }
+    bool known = peers_.count(keyStr(relayPub)) != 0;
+    if(!known){
+        if(now - c.dialWindowMs > 60000){ c.dialWindowMs = now; c.dialsInWindow = 0; }
+        if(c.dialsInWindow >= kMaxNewPeersPerMinute || peers_.size() >= kMaxPeers){
+            uint8_t f[9];
+            f[0] = kLinkClose;
+            putU64(f + 1, circ);
+            sendFrame(connId, Lane::Signal, f, sizeof f);
+            return;
+        }
+        c.dialsInWindow++;
+    }
+    Peer& pr = peerFor(relay, relayPub);
+    uint64_t cr = random64();
+    Circ a;
+    a.other.circ = cr;
+    a.other.peerKey = keyStr(relayPub);
+    a.opener = true;
+    a.lastMs = now;
+    a.tokens = kCircuitBurst;
+    a.refillMs = now;
+    circs_[{connId, circ}] = a;
+    remoteIn_[remoteKey(a.other.peerKey, cr)] = { connId, circ };
+    c.circuitCount++;
+    std::vector<uint8_t> f(1 + 8 + 32);
+    f[0] = kLinkForward;
+    putU64(f.data() + 1, cr);
+    std::memcpy(f.data() + 9, owner, 32);
+    sendToPeer(pr, f);
+}
+
+bool RelayServer::tryBridge(uint64_t connId, uint64_t circ, const Addr& relay, const uint8_t relayPub[32], const uint8_t owner[32]){
+    uint32_t now = nowMs();
+    bool self = crypto_verify32(relayPub, me_.pub) == 0;
+    std::string target = keyStr(relayPub);
+    std::map<uint64_t, size_t> share;
+    size_t total = 0, up = 0;
+    for(auto& e : bridgeOpens_){ share[e.second]++; total++; }
+    for(auto& kv : conns_) if(kv.second.bridge) up++;
+    std::vector<std::pair<uint64_t, double>> cand;
+    double sum = 0;
+    for(auto& kv : conns_){
+        const Conn& b = kv.second;
+        if(!b.bridge || b.circuitCount + (self ? 2 : 1) > kMaxCircuitsPerConn) continue;
+        if(!self && std::find(b.bridgeRelays.begin(), b.bridgeRelays.end(), target) == b.bridgeRelays.end()) continue;
+        auto av = avoid_.find(ipKey(b.ses.peer));
+        if(av != avoid_.end() && (int32_t)(av->second - now) > 0) continue;
+        if(up >= 4 && total >= 4 && share[kv.first] * 4 >= total) continue;
+        double w = std::max(kBridgeFloorKbps, std::min(b.goodKbps, (double)b.capKbps));
+        cand.push_back({ kv.first, w });
+        sum += w;
+    }
+    if(cand.empty() || sum <= 0) return false;
+    double pick = (double)(random64() % 1000000) / 1000000.0 * sum;
+    uint64_t v = cand.back().first;
+    for(auto& cw : cand){
+        if(pick < cw.second){ v = cw.first; break; }
+        pick -= cw.second;
+    }
+    uint8_t f[1 + 8 + 32 + kEnvelopeLen];
+    if(!sealEnvelope(relayPub, owner, f + 41)) return false;
+    uint64_t circIn = newCircuit(v);
+    Circ a;
+    a.other.conn = v;
+    a.other.circ = circIn;
+    a.opener = true;
+    a.lastMs = now;
+    a.tokens = kCircuitBurst;
+    a.refillMs = now;
+    Circ b;
+    b.other.conn = connId;
+    b.other.circ = circ;
+    b.lastMs = now;
+    b.tokens = kCircuitBurst;
+    b.refillMs = now;
+    circs_[{connId, circ}] = a;
+    circs_[{v, circIn}] = b;
+    conns_[connId].circuitCount++;
+    conns_[v].circuitCount++;
+    Pending pd;
+    pd.vConn = v;
+    pd.circIn = circIn;
+    pd.deadline = now + kBridgeConfirmMs;
+    pd.relay = relay;
+    std::memcpy(pd.relayPub, relayPub, 32);
+    std::memcpy(pd.owner, owner, 32);
+    pendingBridge_[{connId, circ}] = pd;
+    pendingByBridge_[{v, circIn}] = { connId, circ };
+    bridgeOpens_.push_back({ now, v });
+    f[0] = kLinkBridgeOpen;
+    putU64(f + 1, circIn);
+    std::memcpy(f + 9, relayPub, 32);
+    sendFrame(v, Lane::Signal, f, sizeof f);
+    return true;
+}
+
+void RelayServer::forgetPending(uint64_t connId, uint64_t circ){
+    auto a = pendingBridge_.find({connId, circ});
+    if(a != pendingBridge_.end()){
+        pendingByBridge_.erase({ a->second.vConn, a->second.circIn });
+        crypto_wipe(a->second.owner, 32);
+        pendingBridge_.erase(a);
+        return;
+    }
+    auto b = pendingByBridge_.find({connId, circ});
+    if(b != pendingByBridge_.end()){
+        auto pa = pendingBridge_.find(b->second);
+        if(pa != pendingBridge_.end()){
+            crypto_wipe(pa->second.owner, 32);
+            pendingBridge_.erase(pa);
+        }
+        pendingByBridge_.erase(b);
+    }
+}
+
+void RelayServer::bridgeFallback(std::pair<uint64_t, uint64_t> key){
+    auto it = pendingBridge_.find(key);
+    if(it == pendingBridge_.end()) return;
+    Pending pd = it->second;
+    crypto_wipe(it->second.owner, 32);
+    pendingBridge_.erase(it);
+    pendingByBridge_.erase({ pd.vConn, pd.circIn });
+    if(circs_.erase(key) && conns_.count(key.first) && conns_[key.first].circuitCount) conns_[key.first].circuitCount--;
+    if(circs_.erase({ pd.vConn, pd.circIn }) && conns_.count(pd.vConn) && conns_[pd.vConn].circuitCount) conns_[pd.vConn].circuitCount--;
+    auto vc = conns_.find(pd.vConn);
+    if(vc != conns_.end()){
+        uint8_t f[9];
+        f[0] = kLinkClose;
+        putU64(f + 1, pd.circIn);
+        sendFrame(pd.vConn, Lane::Signal, f, sizeof f);
+        std::string ip = ipKey(vc->second.ses.peer);
+        if(!ip.empty()) avoid_[ip] = nowMs() + kBridgeAvoidMs;
+    }
+    if(conns_.count(key.first)) routeOpen(key.first, key.second, pd.relay, pd.relayPub, pd.owner);
+    crypto_wipe(pd.owner, 32);
+}
+
+void RelayServer::bridgeFrame(uint64_t connId, const uint8_t* p, size_t n){
+    auto cit = conns_.find(connId);
+    if(cit == conns_.end() || n < 1) return;
+    Conn& c = cit->second;
+    uint8_t kind = p[0];
+    uint32_t now = nowMs();
+    if(kind == kLinkPing){
+        uint8_t f[1] = { kLinkPing };
+        sendFrame(connId, Lane::Signal, f, sizeof f);
+        return;
+    }
+    if(kind == kLinkBridgeHello){
+        if(n < 7) return;
+        uint8_t ver = p[1];
+        uint32_t cap = getU32(p + 2);
+        uint8_t nr = p[6];
+        if(ver != 1 || nr > kMaxBridgeRelays || n != 7 + (size_t)nr * 32) return;
+        if(!c.bridge){
+            std::string ip = ipKey(c.ses.peer);
+            size_t total = 0;
+            bool sameIp = false;
+            for(auto& kv : conns_){
+                if(!kv.second.bridge) continue;
+                total++;
+                if(ipKey(kv.second.ses.peer) == ip) sameIp = true;
+            }
+            bool ok = !ip.empty() && !sameIp && total < kMaxBridges;
+            uint8_t f[2] = { kLinkBridgeWelcome, (uint8_t)(ok ? 1 : 0) };
+            sendFrame(connId, Lane::Signal, f, sizeof f);
+            if(!ok) return;
+            c.bridge = true;
+            c.bridgeWindowMs = now;
+            c.bridgeIdleMs = now;
+        } else {
+            uint8_t f[2] = { kLinkBridgeWelcome, 1 };
+            sendFrame(connId, Lane::Signal, f, sizeof f);
+        }
+        c.capKbps = cap;
+        c.bridgeRelays.clear();
+        for(uint8_t i = 0; i < nr; i++) c.bridgeRelays.push_back(keyStr(p + 7 + 32 * i));
+        return;
+    }
+    if(!c.bridge) return;
+    if(kind == kLinkBridgeIn){
+        if(n != 1 + 8 + kEnvelopeLen) return;
+        uint64_t circOut = getU64(p + 1);
+        const uint8_t* env = p + 9;
+        auto ack = [&](bool ok){
+            uint8_t f[10];
+            f[0] = kLinkBridgeAck;
+            putU64(f + 1, circOut);
+            f[9] = ok ? 1 : 0;
+            sendFrame(connId, Lane::Signal, f, sizeof f);
+        };
+        uint8_t h[16];
+        crypto_blake2b(h, sizeof h, env, kEnvelopeLen);
+        std::string hk((const char*)h, sizeof h);
+        uint8_t owner[32];
+        if(envSeen_.count(hk) || circs_.count({connId, circOut}) || c.circuitCount >= kMaxCircuitsPerConn || !openEnvelope(env, owner)){
+            ack(false);
+            return;
+        }
+        if(envSeen_.size() > 100000) envSeen_.clear();
+        envSeen_[hk] = now;
+        auto t = byOwner_.find(keyStr(owner));
+        bool ok = t != byOwner_.end() && conns_.count(t->second);
+        if(ok) openLocal(connId, circOut, std::string(), owner);
+        crypto_wipe(owner, 32);
+        ack(ok && circs_.count({connId, circOut}) != 0);
+        return;
+    }
+    if(kind == kLinkBridgeAck){
+        if(n != 10) return;
+        uint64_t circIn = getU64(p + 1);
+        auto it = pendingByBridge_.find({connId, circIn});
+        if(it == pendingByBridge_.end()) return;
+        std::pair<uint64_t, uint64_t> key = it->second;
+        if(p[9] == 1){
+            auto pa = pendingBridge_.find(key);
+            if(pa != pendingBridge_.end()){
+                crypto_wipe(pa->second.owner, 32);
+                pendingBridge_.erase(pa);
+            }
+            pendingByBridge_.erase(it);
+            return;
+        }
+        bridgeFallback(key);
+    }
+}
+
+void RelayServer::tickBridges(uint32_t now){
+    std::vector<std::pair<uint64_t, uint64_t>> late;
+    for(auto& kv : pendingBridge_) if((int32_t)(now - kv.second.deadline) >= 0) late.push_back(kv.first);
+    for(auto& k : late) bridgeFallback(k);
+    while(!bridgeOpens_.empty() && (int32_t)(now - bridgeOpens_.front().first) > (int32_t)kBridgeShareWindowMs) bridgeOpens_.pop_front();
+    for(auto it = avoid_.begin(); it != avoid_.end();) if((int32_t)(now - it->second) >= 0) it = avoid_.erase(it); else ++it;
+    for(auto it = envSeen_.begin(); it != envSeen_.end();) if((int32_t)(now - it->second) > (int32_t)kEnvSeenMs) it = envSeen_.erase(it); else ++it;
+    std::vector<uint64_t> idle;
+    for(auto& kv : conns_){
+        Conn& b = kv.second;
+        if(!b.bridge) continue;
+        if((int32_t)(now - b.bridgeWindowMs) >= 60000){
+            double kbps = (double)b.bridgeBytes * 8.0 / (double)(now - b.bridgeWindowMs);
+            b.goodKbps = b.goodKbps * 0.8 + kbps * 0.2;
+            b.bridgeBytes = 0;
+            b.bridgeWindowMs = now;
+        }
+        if(b.circuitCount) b.bridgeIdleMs = now;
+        else if((int32_t)(now - b.bridgeIdleMs) > (int32_t)kBridgeIdleMs) idle.push_back(kv.first);
+    }
+    for(uint64_t id : idle) dropConn(id);
+}
+
 void RelayServer::frame(uint64_t connId, const uint8_t* p, size_t n){
     auto cit = conns_.find(connId);
     if(cit == conns_.end() || n < 1) return;
     Conn& c = cit->second;
     uint8_t kind = p[0];
     uint32_t now = nowMs();
+    if(c.bridge && kind != kLinkData && kind != kLinkClose){
+        bridgeFrame(connId, p, n);
+        return;
+    }
+    if(kind == kLinkBridgeHello){
+        if(!c.registered && !c.dialed) bridgeFrame(connId, p, n);
+        return;
+    }
     if(kind == kLinkRegister){
         if(c.dialed) return;
         std::string owner = keyStr(c.ses.peerPub);
@@ -324,41 +669,9 @@ void RelayServer::frame(uint64_t connId, const uint8_t* p, size_t n){
         if(circs_.count({connId, circ})) return;
         Addr relay;
         if(!decodeAddr(p + 9, relay)) return;
-        const uint8_t* relayPub = p + 28;
-        const uint8_t* owner = p + 60;
-        if(crypto_verify32(relayPub, me_.pub) == 0){
-            openLocal(connId, circ, std::string(), owner);
-            return;
-        }
-        bool known = peers_.count(keyStr(relayPub)) != 0;
-        if(!known){
-            if(now - c.dialWindowMs > 60000){ c.dialWindowMs = now; c.dialsInWindow = 0; }
-            if(c.dialsInWindow >= kMaxNewPeersPerMinute || peers_.size() >= kMaxPeers){
-                uint8_t f[9];
-                f[0] = kLinkClose;
-                putU64(f + 1, circ);
-                sendFrame(connId, Lane::Signal, f, sizeof f);
-                return;
-            }
-            c.dialsInWindow++;
-        }
-        Peer& pr = peerFor(relay, relayPub);
-        uint64_t cr = random64();
-        Circ a;
-        a.other.circ = cr;
-        a.other.peerKey = keyStr(relayPub);
-        a.opener = true;
-        a.lastMs = now;
-        a.tokens = kCircuitBurst;
-        a.refillMs = now;
-        circs_[{connId, circ}] = a;
-        remoteIn_[remoteKey(a.other.peerKey, cr)] = { connId, circ };
-        c.circuitCount++;
-        std::vector<uint8_t> f(1 + 8 + 32);
-        f[0] = kLinkForward;
-        putU64(f.data() + 1, cr);
-        std::memcpy(f.data() + 9, owner, 32);
-        sendToPeer(pr, f);
+        uint8_t flags = n >= 1 + 8 + 19 + 32 + 32 + 1 ? p[92] : 0;
+        if((flags & kOpenMasked) && tryBridge(connId, circ, relay, p + 28, p + 60)) return;
+        routeOpen(connId, circ, relay, p + 28, p + 60);
         return;
     }
     if(kind == kLinkForward){
@@ -402,6 +715,11 @@ void RelayServer::frame(uint64_t connId, const uint8_t* p, size_t n){
         if(here->tokens < (double)pn) return;
         here->tokens -= (double)pn;
         here->lastMs = now;
+        if(c.bridge) c.bridgeBytes += pn;
+        if(target.peerKey.empty()){
+            auto tc = conns_.find(target.conn);
+            if(tc != conns_.end() && tc->second.bridge) tc->second.bridgeBytes += pn;
+        }
         if(target.peerKey.empty()){
             auto o = circs_.find({target.conn, target.circ});
             if(o != circs_.end()) o->second.lastMs = now;
@@ -412,7 +730,7 @@ void RelayServer::frame(uint64_t connId, const uint8_t* p, size_t n){
     if(kind == kLinkPublish){
         if(!c.registered || c.dialed) return;
         PointerRecord r;
-        bool ok = openPointer(p + 1, n - 1, wallSeconds(), r) && crypto_verify32(r.owner, c.ses.peerPub) == 0 && crypto_verify32(r.relayPub, me_.pub) == 0;
+        bool ok = openPointer(p + 1, n - 1, wallSeconds(), r) && crypto_verify32(r.owner, c.ses.peerPub) == 0 && (crypto_verify32(r.relayPub, me_.pub) == 0 || (r.relays == 2 && crypto_verify32(r.relayPub2, me_.pub) == 0));
         if(!ok){
             uint8_t f[2] = { kLinkPublished, 0 };
             sendFrame(connId, Lane::Signal, f, sizeof f);
@@ -544,22 +862,22 @@ void RelayServer::tick(){
     uint32_t now = nowMs();
     std::vector<uint64_t> dead;
     for(auto& kv : conns_){
-        if(now - kv.second.lastRecvMs > kLinkSilentMs) dead.push_back(kv.first);
-        else if(kv.second.dialed && now - kv.second.lastSendMs > kPeerPingMs){
+        if((int32_t)(now - kv.second.lastRecvMs) > (int32_t)kLinkSilentMs) dead.push_back(kv.first);
+        else if(kv.second.dialed && (int32_t)(now - kv.second.lastSendMs) > (int32_t)kPeerPingMs){
             uint8_t f[1] = { kLinkPing };
             sendFrame(kv.first, Lane::Signal, f, sizeof f);
         }
     }
     for(uint64_t id : dead) dropConn(id);
     std::vector<std::pair<uint64_t, uint64_t>> idle;
-    for(auto& kv : circs_) if(now - kv.second.lastMs > kCircuitIdleMs) idle.push_back(kv.first);
+    for(auto& kv : circs_) if((int32_t)(now - kv.second.lastMs) > (int32_t)kCircuitIdleMs) idle.push_back(kv.first);
     for(auto& k : idle) if(circs_.count(k)) dropCircuit(k.first, k.second, true);
     std::vector<std::string> giveUp;
     for(auto& kv : peers_){
         Peer& p = kv.second;
         if(!p.dialing) continue;
         uint32_t wait = 1000u << std::min(p.tries, 3);
-        if(now - p.lastDialMs < wait) continue;
+        if((int32_t)(now - p.lastDialMs) < (int32_t)wait) continue;
         if(p.tries >= 8) giveUp.push_back(kv.first);
         else dialPeer(p);
     }
@@ -597,6 +915,7 @@ void RelayServer::tick(){
             sendFrame(d.conn, Lane::Signal, f.data(), f.size());
         }
     }
+    tickBridges(nowMs());
 }
 
 void RelayServer::workerLoop(){

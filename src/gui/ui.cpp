@@ -34,7 +34,7 @@ enum Action {
     A_FMYNAME, A_SAVENAME, A_SETTINGS, A_HUBS, A_MODALCLOSE, A_EMOJI, A_ATTACH, A_MUTE, A_DEAFEN, A_BELL, A_HANGUP,
     A_ACCEPT, A_DECLINE, A_CALLOK, A_MENU, A_COPYCODE, A_MENUADD, A_MENUCOPY,
     A_HUBMENU, A_HUBINVITE, A_HUBSET, A_HUBLEAVE, A_LEAVEOK, A_CREATE, A_JOIN, A_FHUBNAME, A_FINVITE, A_FRENAME, A_FCHAN,
-    A_RENAME, A_ADDCHAN, A_CHANKIND, A_COPYINV, A_VLEAVE, A_VMUTE, A_VDEAFEN, A_MEMBERS,
+    A_RENAME, A_ADDCHAN, A_CHANKIND, A_COPYINV, A_VLEAVE, A_VMUTE, A_VDEAFEN, A_MEMBERS, A_VOLUNTEER,
     A_MODALBOX = 900, A_FRIEND = 1000, A_EMOJIPICK = 2000, A_REQACCEPT = 3000, A_REQIGNORE = 3100,
     A_HUB = 4000, A_CHAN = 4100, A_KICK = 4200, A_BAN = 4300, A_ROLE = 4400, A_RMCHAN = 4500, A_UNBAN = 4600, A_HUBEND = 4700
 };
@@ -783,7 +783,8 @@ void StarUI::drawAdd(Canvas& c, float w, float h){
 void StarUI::drawSettings(Canvas& c, float w, float h){
     c.fill(rc(0, 0, w, h), rgb(0x000000, 0.7f));
     hot(rc(0, 0, w, h), A_MODALCLOSE);
-    float bw = 520, bh = 470;
+    float bw = 520, bh = 610;
+    if(bh > h - 20) bh = h - 20;
     Rect box = rc((w - bw) / 2, (h - bh) / 2, bw, bh);
     c.round(box, 8, kChat);
     hot(box, A_MODALBOX);
@@ -802,6 +803,17 @@ void StarUI::drawSettings(Canvas& c, float w, float h){
     c.text("DATA FOLDER (YOUR IDENTITY, @NAME, FRIENDS LIST AND HUBS)", rc(x, y, fw, 18), Font::Small, kMuted, Align::Left, false, true);
     c.text(hub_.dataFolder(), rc(x, y + 20, fw, 40), Font::Small, kText, Align::Left, true, false);
     y += 66;
+    bool vol = hub_.volunteer();
+    c.text("HELP THE NETWORK", rc(x, y, fw, 18), Font::Small, kMuted, Align::Left, false, true);
+    c.text("Carry other people's encrypted messages while StarCom is open, using up to 2 Mbps of your upload. You only pass along encrypted data you cannot read. Only the StarCom entry relays learn your IP address; other users never do.", rc(x, y + 20, fw - 100, 64), Font::Small, kText, Align::Left, true, false);
+    button(c, rc(x + fw - 88, y + 22, 88, 36), vol ? "On" : "Off", vol ? kBlue : kDark, kText, A_VOLUNTEER, vol ? "Stop helping the network" : "Start helping the network");
+    std::string vs;
+    if(vol){
+        BridgeStats st = hub_.bridgeStats();
+        vs = st.relays == 0 ? std::string("Connecting to the StarCom relays...") : "Helping now: " + std::to_string(st.pairs) + (st.pairs == 1 ? " conversation" : " conversations") + " through " + std::to_string(st.relays) + (st.relays == 1 ? " relay" : " relays") + ", " + std::to_string(st.kbps) + " kbps.";
+    } else vs = "Off. Nothing is carried for anyone.";
+    c.text(vs, rc(x, y + 86, fw, 18), Font::Small, vol ? kBlue : kMuted, Align::Left, false, true);
+    y += 114;
     c.text("ABOUT", rc(x, y, fw, 18), Font::Small, kMuted, Align::Left, false, true);
     c.text("StarCom: direct messages, voice calls and hubs with no accounts and no servers that read anything. Built with AI, openly: the code is written with AI coding assistants (two instances of Claude by Anthropic) under the direction of Chaos. StarCom itself contains no AI.", rc(x, y + 20, fw, 80), Font::Small, kText, Align::Left, true, false);
     button(c, rc(box.x + bw - 116, box.y + bh - 56, 96, 38), "Close", kDark, kText, A_MODALCLOSE);
@@ -1317,6 +1329,10 @@ void StarUI::act(int a){
     case A_DECLINE: if(selected_ >= 0) hub_.callAction(idx, CallAction::Hangup); break;
     case A_CALLOK: if(selected_ >= 0 && idx < callDismissed_.size()) callDismissed_[idx] = true; break;
     case A_VLEAVE: hub_.voiceLeave(); break;
+    case A_VOLUNTEER: {
+        std::string err;
+        if(!hub_.setVolunteer(!hub_.volunteer(), err)) flash_ = err;
+        break; }
     case A_VMUTE: if(hub_.hubVoice().active) hub_.hubVoiceMute(); break;
     case A_VDEAFEN: if(hub_.hubVoice().active) hub_.hubVoiceDeafen(); break;
     default: break;

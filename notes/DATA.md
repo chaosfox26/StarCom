@@ -10,11 +10,12 @@ StarCom collects nothing about its users. There are no accounts, no analytics an
 |---|---|---|---|
 | Your identity: a 32-byte secret seed and your 32-byte public key | `identity.key`, in the StarCom data folder: `%LOCALAPPDATA%\StarCom` on Windows (the local, non-roaming folder, so it is never copied to a school or company server), `~/.local/share/starcom` on Linux | Until you delete it. Deleting it deletes your identity for good. | **Not yet.** In this early version the file is protected only by your operating system account. Passphrase encryption is planned. Keep the file private and back it up. |
 | Your @name (how friends find you) | `name.txt`, in the StarCom data folder | Until you change or delete it | No. Your @name is public by design: it is how friends find you. |
-| Your friends list: each friend's code, the nickname you gave them, and their @name | `friends.txt`, in the StarCom data folder | Until you delete it | No. Nicknames are only on your computer and are never sent to anyone. |
+| Your friends list: each friend's code, the nickname you gave them, their @name, and "+met" once you have had a conversation with them (after that, your conversations with them skip volunteer bridges) | `friends.txt`, in the StarCom data folder | Until you delete it | No. Nicknames are only on your computer and are never sent to anyone. |
 | Each hub you are in: its signed layout (name, channels, members with their @names, public keys and roles, and the ban list) | `hubs/<hub id>.manifest`, in the StarCom data folder | Until you leave the hub | No: it is signed by the hub's owner, not secret. It holds no IP addresses. |
 | Each hub's signed join, kick, ban, unban and leave records | `hubs/<hub id>.records` | Until the owner folds them into the layout, or you leave the hub | No: signed, not secret |
 | Each hub's channel keys, each with the signature of the owner or admin who made it | `hubs/<hub id>.keys` | Replaced every hour by a one-way hash (the old key is overwritten), replaced on every kick or ban and about every 30 days, deleted when you leave | **Not yet**, like `identity.key`: protected only by your operating system account. Keep the data folder private. |
 | The invites you made | `hubs/invites` | Until each invite expires or is used up | Only a hash of each invite's token is stored, never the token itself |
+| Whether you help the network (on or off) | `volunteer.txt` | Until you change it | No: it holds only "on" or "off" |
 
 ## Sent over the network
 
@@ -28,7 +29,8 @@ StarCom collects nothing about its users. There are no accounts, no analytics an
 | Hub presence: online or leaving, and which voice channel you are in | The hub's members | When it changes, and every 5 minutes | Signed, inside the end-to-end sessions |
 | Joining a hub: the invite's token and your @name | The member who made the invite | When you join | Yes, end to end. Your @name is checked against your key in Star DNS before you are admitted. |
 | A hub's layout, records and channel keys | The members you are connected to in that hub | When you connect to them, and after every change | Yes, end to end. Channel keys go only to current members. |
-| **Your IP address** | **Never sent to any other user,** including hub members. Only your relay sees it, because packets come from it. | | |
+| Only if you help the network: a random bridge key (new on every start), your upload limit, and which entry relays you are linked to | The StarCom entry relays | When StarCom starts with the setting on | Inside the encrypted link. The bridge key is never your identity key, so a relay cannot tie your help to your @name. |
+| **Your IP address** | **Never sent to any other user,** including hub members and volunteers. Only your relay sees it, because packets come from it. If you help the network, the entry relays also see your address for the bridge link. | | |
 
 Note on the capability list: it includes the names of your video encoders (for example the brand of your graphics card). That is a hardware fingerprint. Only the peer you connect to can read it; later versions will send only the codec tiers, without names, to anyone who is not on your friend list.
 

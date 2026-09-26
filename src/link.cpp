@@ -14,8 +14,8 @@ using Clock = std::chrono::steady_clock;
 const uint8_t kRegister = 1, kRegistered = 2, kOpen = 3, kData = 4, kIncoming = 5, kClose = 6,
               kPublish = 7, kLookup = 8, kResult = 9, kPing = 10, kPublished = 12;
 const uint8_t kKeyReq = 1, kKeyRep = 2;
+const uint8_t kOpenMasked = 1;
 const size_t kKeyReqLen = 64;
-const size_t kMaxInner = 1351;
 
 uint32_t nowMs(){
     return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();
@@ -34,6 +34,12 @@ bool cancelled(const std::atomic<bool>* c){ return c && c->load(); }
 void pause(int ms, const std::atomic<bool>* stop){
     auto until = Clock::now() + std::chrono::milliseconds(ms);
     while(Clock::now() < until && !cancelled(stop)) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+}
+
+bool zero32(const uint8_t* p){
+    uint8_t acc = 0;
+    for(int i = 0; i < 32; i++) acc |= p[i];
+    return acc == 0;
 }
 
 }
@@ -85,20 +91,28 @@ void RelayLink::stop(){
     quit_ = true;
     waitCv_.notify_all();
     if(ctl_.joinable()) ctl_.join();
-    if(rx_.joinable()) rx_.join();
-    dropCircuits();
-    hsCh_.close();
-    if(hsQ_) hsQ_->shut();
-    if(keyQ_) keyQ_->shut();
-    sock_.close();
+    for(Conn& k : conns_) if(k.rx.joinable()) k.rx.join();
+    dropCircuits(-1);
+    for(Conn& k : conns_){
+        k.hsCh.close();
+        if(k.hsQ) k.hsQ->shut();
+        if(k.keyQ) k.keyQ->shut();
+        k.sock.close();
+        {
+            std::lock_guard<std::mutex> g(k.sessMu);
+            sessionWipe(k.ses);
+            k.linked = false;
+        }
+        k.ready = false;
+        k.used = false;
+        crypto_wipe(k.relayPub, sizeof k.relayPub);
+    }
     {
-        std::lock_guard<std::mutex> g(sessMu_);
-        sessionWipe(link_);
-        linked_ = false;
+        std::lock_guard<std::mutex> g(waitMu_);
+        for(Conn& k : conns_) k.registered = false;
     }
     ready_ = false;
     identityWipe(id_);
-    crypto_wipe(relayPub_, sizeof relayPub_);
 }
 
 bool RelayLink::waitReady(int maxMs, const std::atomic<bool>* cancel){
@@ -110,34 +124,47 @@ bool RelayLink::waitReady(int maxMs, const std::atomic<bool>* cancel){
     return true;
 }
 
-void RelayLink::dropCircuits(){
-    std::lock_guard<std::mutex> g(circMu_);
-    for(auto& c : circuits_) c.second.q->shut();
-    circuits_.clear();
+int RelayLink::primary() const {
+    for(int i = 0; i < kConns; i++) if(conns_[i].ready) return i;
+    return 0;
 }
 
-bool RelayLink::sendFrame(Lane lane, const uint8_t* p, size_t n){
+void RelayLink::dropCircuits(int ci){
+    std::lock_guard<std::mutex> g(circMu_);
+    for(auto it = circuits_.begin(); it != circuits_.end();){
+        if(ci >= 0 && it->second.ci != ci){ ++it; continue; }
+        it->second.q->shut();
+        it = circuits_.erase(it);
+    }
+    for(auto it = incomingConn_.begin(); it != incomingConn_.end();){
+        if(ci >= 0 && it->second != ci){ ++it; continue; }
+        it = incomingConn_.erase(it);
+    }
+}
+
+bool RelayLink::sendFrame(int ci, Lane lane, const uint8_t* p, size_t n){
+    Conn& k = conns_[ci];
     uint8_t pkt[kMaxPacket];
     size_t len = 0;
     bool ok;
     {
-        std::lock_guard<std::mutex> g(sessMu_);
-        if(!linked_) return false;
-        ok = sessionSeal(link_, lane, p, n, pkt, sizeof pkt, len);
+        std::lock_guard<std::mutex> g(k.sessMu);
+        if(!k.linked) return false;
+        ok = sessionSeal(k.ses, lane, p, n, pkt, sizeof pkt, len);
     }
-    return ok && sock_.sendTo(pkt, len, relay_) == (int)len;
+    return ok && k.sock.sendTo(pkt, len, k.relay) == (int)len;
 }
 
-bool RelayLink::sendControl(uint8_t kind, const uint8_t* body, size_t n){
+bool RelayLink::sendControl(int ci, uint8_t kind, const uint8_t* body, size_t n){
     uint8_t buf[kMaxPacket];
     if(1 + n > sizeof buf) return false;
     buf[0] = kind;
     if(n) std::memcpy(buf + 1, body, n);
-    return sendFrame(Lane::Signal, buf, 1 + n);
+    return sendFrame(ci, Lane::Signal, buf, 1 + n);
 }
 
-int RelayLink::sendData(uint64_t circuit, const uint8_t* p, size_t n){
-    if(n > kMaxInner) return -1;
+int RelayLink::sendData(int ci, uint64_t circuit, const uint8_t* p, size_t n){
+    if(n > kMaxCircuitInner) return -1;
     uint8_t buf[kMaxPacket];
     buf[0] = kData;
     putU64(buf + 1, circuit);
@@ -145,15 +172,15 @@ int RelayLink::sendData(uint64_t circuit, const uint8_t* p, size_t n){
     Lane lane = Lane::Signal;
     Header h;
     if(readHeader(p, n, h)) lane = h.lane;
-    return sendFrame(lane, buf, 9 + n) ? (int)n : -1;
+    return sendFrame(ci, lane, buf, 9 + n) ? (int)n : -1;
 }
 
-void RelayLink::dispatch(const uint8_t* p, size_t n){
+void RelayLink::dispatch(int ci, const uint8_t* p, size_t n){
     if(n < 1) return;
     uint8_t kind = p[0];
     if(kind == kRegistered){
         std::lock_guard<std::mutex> g(waitMu_);
-        registered_ = n >= 2 && p[1] != 0;
+        conns_[ci].registered = n >= 2 && p[1] != 0;
         waitCv_.notify_all();
         return;
     }
@@ -180,13 +207,15 @@ void RelayLink::dispatch(const uint8_t* p, size_t n){
     if(kind == kData){
         std::lock_guard<std::mutex> g(circMu_);
         auto it = circuits_.find(c);
-        if(it != circuits_.end()) it->second.q->push(p + 9, n - 9, relay_);
+        if(it != circuits_.end() && it->second.ci == ci) it->second.q->push(p + 9, n - 9, conns_[ci].relay);
         return;
     }
     if(kind == kClose){
         std::lock_guard<std::mutex> g(circMu_);
         auto it = circuits_.find(c);
-        if(it != circuits_.end()){ it->second.q->shut(); circuits_.erase(it); }
+        if(it != circuits_.end() && it->second.ci == ci){ it->second.q->shut(); circuits_.erase(it); }
+        auto ic = incomingConn_.find(c);
+        if(ic != incomingConn_.end() && ic->second == ci) incomingConn_.erase(ic);
         return;
     }
     if(kind == kIncoming){
@@ -195,100 +224,130 @@ void RelayLink::dispatch(const uint8_t* p, size_t n){
             std::lock_guard<std::mutex> g(incomingMu_);
             fn = incoming_;
         }
-        if(fn) fn(c);
-        else sendControl(kClose, p + 1, 8);
+        if(fn){
+            {
+                std::lock_guard<std::mutex> g(circMu_);
+                incomingConn_[c] = ci;
+            }
+            fn(c);
+        } else sendControl(ci, kClose, p + 1, 8);
     }
 }
 
-void RelayLink::rxLoop(){
+void RelayLink::rxLoop(int ci){
+    Conn& k = conns_[ci];
     uint8_t buf[kMaxPacket], plain[kMaxPacket];
     while(!quit_){
         Addr from;
-        int r = sock_.recvFrom(buf, sizeof buf, from, 200);
-        if(r <= 0 || !(from == relay_)) continue;
+        int r = k.sock.recvFrom(buf, sizeof buf, from, 200);
+        if(r <= 0 || !(from == k.relay)) continue;
         Header h;
         if(!readHeader(buf, (size_t)r, h)) continue;
-        lastRecvMs_ = nowMs();
-        if(h.type == PacketType::Link){ keyQ_->push(buf, (size_t)r, from); continue; }
-        if(h.type == PacketType::Hello || h.type == PacketType::Welcome){ hsQ_->push(buf, (size_t)r, from); continue; }
-        if(h.type != PacketType::Data || !linked_) continue;
+        k.lastRecvMs = nowMs();
+        if(h.type == PacketType::Link){ k.keyQ->push(buf, (size_t)r, from); continue; }
+        if(h.type == PacketType::Hello || h.type == PacketType::Welcome){ k.hsQ->push(buf, (size_t)r, from); continue; }
+        if(h.type != PacketType::Data || !k.linked) continue;
         Lane lane;
         size_t n = 0;
         bool ok;
         {
-            std::lock_guard<std::mutex> g(sessMu_);
-            ok = sessionOpen(link_, buf, (size_t)r, from, lane, plain, sizeof plain, n);
+            std::lock_guard<std::mutex> g(k.sessMu);
+            ok = sessionOpen(k.ses, buf, (size_t)r, from, lane, plain, sizeof plain, n);
         }
-        if(ok && n > 0) dispatch(plain, n);
+        if(ok && n > 0) dispatch(ci, plain, n);
     }
 }
 
-bool RelayLink::publish(std::string& err){
+bool RelayLink::publish(int ci, std::string& err){
     if(name_.empty()) return true;
+    const Conn& k = conns_[ci];
+    const Conn& o = conns_[1 - ci];
     PointerRecord r;
     std::memcpy(r.owner, id_.pub, 32);
     r.name = name_;
     r.seq = wallMsNow();
     r.expires = wallSeconds() + kPointerMaxLifeSec;
-    r.relay = relay_;
-    std::memcpy(r.relayPub, relayPub_, 32);
+    r.relay = k.relay;
+    std::memcpy(r.relayPub, k.relayPub, 32);
+    if(o.used && o.ready && !zero32(o.relayPub) && std::memcmp(o.relayPub, k.relayPub, 32) != 0){
+        r.relays = 2;
+        r.relay2 = o.relay;
+        std::memcpy(r.relayPub2, o.relayPub, 32);
+    }
     uint8_t rec[kMaxPointerLen + 64];
     size_t n = signPointer(id_, r, rec, sizeof rec);
     if(!n){ err = "could not sign your @name record"; return false; }
-    if(!sendControl(kPublish, rec, n)){ err = "not connected to your relay"; return false; }
+    if(!sendControl(ci, kPublish, rec, n)){ err = "not connected to your relay"; return false; }
     return true;
 }
 
-bool RelayLink::linkUp(std::string& err){
-    bool havePub = false;
-    for(int i = 0; i < 32; i++) if(relayPub_[i]) havePub = true;
-    if(!havePub){
+bool RelayLink::linkUp(int ci, std::string& err){
+    Conn& k = conns_[ci];
+    if(zero32(k.relayPub)){
         UdpSocket keyCh;
-        keyCh.attach(sock_, keyQ_);
+        keyCh.attach(k.sock, k.keyQ);
         uint8_t req[kKeyReqLen] = {0};
         writeHeader(req, PacketType::Link, Lane::Signal);
         req[kHeaderLen] = kKeyReq;
+        bool havePub = false;
         for(int t = 0; t < 3 && !havePub && !quit_; t++){
-            sock_.sendTo(req, sizeof req, relay_);
+            k.sock.sendTo(req, sizeof req, k.relay);
             uint8_t in[kMaxPacket];
             Addr from;
             int r = keyCh.recvFrom(in, sizeof in, from, 1000);
-            if(r >= (int)(kHeaderLen + 1 + 32) && in[kHeaderLen] == kKeyRep){
-                std::memcpy(relayPub_, in + kHeaderLen + 1, 32);
+            if(r >= (int)(kHeaderLen + 1 + 32) && in[kHeaderLen] == kKeyRep && !zero32(in + kHeaderLen + 1)){
+                std::memcpy(k.relayPub, in + kHeaderLen + 1, 32);
                 havePub = true;
             }
         }
         keyCh.close();
         if(!havePub){ err = "the relay did not answer"; return false; }
+        for(int j = 0; j < kConns; j++){
+            if(j == ci || !conns_[j].used || zero32(conns_[j].relayPub)) continue;
+            if(std::memcmp(conns_[j].relayPub, k.relayPub, 32) == 0){
+                k.used = false;
+                err = "the same relay twice";
+                return false;
+            }
+        }
     }
     Session s;
     std::string caps, e;
-    if(!hsInitiate(hsCh_, relay_, id_, relayPub_, "{}", s, caps, e, 8000)){ err = "the relay did not complete the encrypted link"; return false; }
+    if(!hsInitiate(k.hsCh, k.relay, id_, k.relayPub, "{}", s, caps, e, 8000)){ err = "the relay did not complete the encrypted link"; return false; }
     {
-        std::lock_guard<std::mutex> g(sessMu_);
-        link_ = s;
-        linked_ = true;
+        std::lock_guard<std::mutex> g(k.sessMu);
+        k.ses = s;
+        k.linked = true;
     }
     sessionWipe(s);
-    lastRecvMs_ = nowMs();
+    k.lastRecvMs = nowMs();
     {
         std::lock_guard<std::mutex> g(waitMu_);
-        registered_ = false;
+        k.registered = false;
     }
-    sendControl(kRegister, nullptr, 0);
+    sendControl(ci, kRegister, nullptr, 0);
     {
         std::unique_lock<std::mutex> g(waitMu_);
-        waitCv_.wait_for(g, std::chrono::seconds(5), [this]{ return registered_ || quit_.load(); });
-        if(!registered_){
-            std::lock_guard<std::mutex> g2(sessMu_);
-            linked_ = false;
+        waitCv_.wait_for(g, std::chrono::seconds(5), [this, &k]{ return k.registered || quit_.load(); });
+        if(!k.registered){
+            std::lock_guard<std::mutex> g2(k.sessMu);
+            k.linked = false;
             err = "the relay did not accept the link";
             return false;
         }
     }
-    std::string pe;
-    publish(pe);
     return true;
+}
+
+void RelayLink::linkDown(int ci){
+    Conn& k = conns_[ci];
+    {
+        std::lock_guard<std::mutex> g(k.sessMu);
+        k.linked = false;
+        sessionWipe(k.ses);
+    }
+    k.ready = false;
+    dropCircuits(ci);
 }
 
 void RelayLink::ctlLoop(){
@@ -299,45 +358,66 @@ void RelayLink::ctlLoop(){
         failed_ = true;
         return;
     }
-    relay_ = seeds[0];
-    for(const Addr& a : seeds) if(a.family() == familyV4()){ relay_ = a; break; }
-    if(!sock_.open(relay_.family(), 0, err)){ setNote(err); failed_ = true; return; }
-    hsQ_ = std::make_shared<PacketQueue>();
-    keyQ_ = std::make_shared<PacketQueue>();
-    hsCh_.attach(sock_, hsQ_);
-    rx_ = std::thread([this]{ rxLoop(); });
-    int backoff = 1;
-    uint32_t lastPing = 0, lastPublish = 0;
-    while(!quit_){
-        if(!linked_){
-            if(linkUp(err)){
-                backoff = 1;
-                lastPing = lastPublish = nowMs();
-                ready_ = true;
-                setNote(name_.empty() ? std::string("Connected to your relay.") : "Online as @" + name_ + ". Your IP address stays hidden.");
-            } else {
-                ready_ = false;
-                setNote("Cannot reach the StarCom network yet (" + err + "); retrying...");
-                pause(backoff * 1000, &quit_);
-                backoff = backoff * 2 > 30 ? 30 : backoff * 2;
-            }
+    std::vector<Addr> use;
+    for(const Addr& a : seeds) if(a.family() == familyV4()) use.push_back(a);
+    if(use.empty()) use = seeds;
+    for(int i = 0; i < kConns && i < (int)use.size(); i++){
+        Conn& k = conns_[i];
+        k.relay = use[(size_t)i];
+        if(!k.sock.open(k.relay.family(), 0, err)){
+            if(i == 0){ setNote(err); failed_ = true; return; }
             continue;
+        }
+        k.hsQ = std::make_shared<PacketQueue>();
+        k.keyQ = std::make_shared<PacketQueue>();
+        k.hsCh.attach(k.sock, k.hsQ);
+        k.used = true;
+        k.rx = std::thread([this, i]{ rxLoop(i); });
+    }
+    int backoff[kConns] = { 1, 1 };
+    uint32_t retryAt[kConns] = { 0, 0 };
+    uint32_t lastPing[kConns] = { 0, 0 }, lastPublish[kConns] = { 0, 0 };
+    int shownMask = -1;
+    while(!quit_){
+        for(int i = 0; i < kConns && !quit_; i++){
+            Conn& k = conns_[i];
+            if(!k.used) continue;
+            uint32_t now = nowMs();
+            if(!k.linked){
+                if(retryAt[i] && (int32_t)(now - retryAt[i]) < 0) continue;
+                if(linkUp(i, err)){
+                    backoff[i] = 1;
+                    retryAt[i] = 0;
+                    lastPing[i] = lastPublish[i] = nowMs();
+                    k.ready = true;
+                    for(int j = 0; j < kConns; j++) if(conns_[j].ready){ std::string pe; publish(j, pe); lastPublish[j] = nowMs(); }
+                } else {
+                    k.ready = false;
+                    if(!k.used) continue;
+                    retryAt[i] = nowMs() + (uint32_t)backoff[i] * 1000;
+                    backoff[i] = backoff[i] * 2 > 30 ? 30 : backoff[i] * 2;
+                    if(i == 0 && !ready_) setNote("Cannot reach the StarCom network yet (" + err + "); retrying...");
+                }
+                continue;
+            }
+            if(now - lastPing[i] >= 25000){ sendControl(i, kPing, nullptr, 0); lastPing[i] = now; }
+            if(now - k.lastRecvMs.load() >= 75000){
+                linkDown(i);
+                for(int j = 0; j < kConns; j++) if(conns_[j].ready){ std::string pe; publish(j, pe); lastPublish[j] = now; }
+                continue;
+            }
+            if(now - lastPublish[i] >= 1800000){ std::string pe; publish(i, pe); lastPublish[i] = now; }
+        }
+        bool any = false;
+        int mask = 0;
+        for(int i = 0; i < kConns; i++) if(conns_[i].ready){ any = true; mask |= 1 << i; }
+        ready_ = any;
+        if(mask != shownMask){
+            if(any && shownMask <= 0) setNote(name_.empty() ? std::string("Connected to your relay.") : "Online as @" + name_ + ". Your IP address stays hidden.");
+            else if(!any && shownMask > 0) setNote("Lost the connection to your relay; reconnecting...");
+            shownMask = mask;
         }
         pause(200, &quit_);
-        uint32_t now = nowMs();
-        if(now - lastPing >= 25000){ sendControl(kPing, nullptr, 0); lastPing = now; }
-        if(now - lastRecvMs_.load() >= 75000){
-            {
-                std::lock_guard<std::mutex> g(sessMu_);
-                linked_ = false;
-                sessionWipe(link_);
-            }
-            ready_ = false;
-            dropCircuits();
-            setNote("Lost the connection to your relay; reconnecting...");
-            continue;
-        }
-        if(now - lastPublish >= 1800000){ std::string e; publish(e); lastPublish = now; }
     }
 }
 
@@ -354,7 +434,7 @@ bool RelayLink::lookup(const std::string& name, const uint8_t* pin, PointerRecor
     body[0] = (uint8_t)name.size();
     std::memcpy(body + 1, name.data(), name.size());
     if(pin) std::memcpy(body + 1 + name.size(), pin, 32);
-    if(!sendControl(kLookup, body, 1 + name.size() + 32)){ err = "not connected to your relay"; return false; }
+    if(!sendControl(primary(), kLookup, body, 1 + name.size() + 32)){ err = "not connected to your relay"; return false; }
     std::vector<uint8_t> rec;
     {
         std::unique_lock<std::mutex> g(waitMu_);
@@ -371,41 +451,63 @@ bool RelayLink::lookup(const std::string& name, const uint8_t* pin, PointerRecor
     return true;
 }
 
-bool RelayLink::open(const PointerRecord& friendRec, UdpSocket& ch, std::string& err){
+bool RelayLink::open(const PointerRecord& friendRec, UdpSocket& ch, std::string& err, bool masked){
+    const Addr* tAddr[2] = { &friendRec.relay, &friendRec.relay2 };
+    const uint8_t* tPub[2] = { friendRec.relayPub, friendRec.relayPub2 };
+    int nt = friendRec.relays == 2 ? 2 : 1;
+    int ci = -1, ti = 0;
+    for(int pass = 0; pass < 2 && ci < 0; pass++){
+        for(int i = 0; i < kConns && ci < 0; i++){
+            if(!conns_[i].ready) continue;
+            for(int t = 0; t < nt; t++){
+                if(pass == 0 && std::memcmp(conns_[i].relayPub, tPub[t], 32) == 0) continue;
+                ci = i;
+                ti = t;
+                break;
+            }
+        }
+    }
+    if(ci < 0){ err = "not connected to your relay"; return false; }
     uint64_t c = 0;
     while(c == 0) if(!sysRandom((uint8_t*)&c, sizeof c)){ err = "no system randomness"; return false; }
     auto q = std::make_shared<PacketQueue>();
     {
         std::lock_guard<std::mutex> g(circMu_);
-        circuits_[c] = Circuit{ &ch, q };
+        circuits_[c] = Circuit{ &ch, q, ci };
     }
-    ch.attach(sock_, q, [this, c](const uint8_t* p, size_t n, const Addr&){ return sendData(c, p, n); });
-    uint8_t body[8 + 19 + 32 + 32];
+    ch.attach(conns_[ci].sock, q, [this, ci, c](const uint8_t* p, size_t n, const Addr&){ return sendData(ci, c, p, n); });
+    uint8_t body[8 + 19 + 32 + 32 + 1];
     putU64(body, c);
-    encodeAddr(friendRec.relay, body + 8);
-    std::memcpy(body + 27, friendRec.relayPub, 32);
+    encodeAddr(*tAddr[ti], body + 8);
+    std::memcpy(body + 27, tPub[ti], 32);
     std::memcpy(body + 59, friendRec.owner, 32);
-    if(!sendControl(kOpen, body, sizeof body)){ close(ch); err = "not connected to your relay"; return false; }
+    body[91] = masked ? kOpenMasked : 0;
+    if(!sendControl(ci, kOpen, body, sizeof body)){ close(ch); err = "not connected to your relay"; return false; }
     return true;
 }
 
 void RelayLink::accept(uint64_t circuit, UdpSocket& ch){
     auto q = std::make_shared<PacketQueue>();
+    int ci = 0;
     {
         std::lock_guard<std::mutex> g(circMu_);
-        circuits_[circuit] = Circuit{ &ch, q };
+        auto ic = incomingConn_.find(circuit);
+        if(ic != incomingConn_.end()){ ci = ic->second; incomingConn_.erase(ic); }
+        circuits_[circuit] = Circuit{ &ch, q, ci };
     }
-    ch.attach(sock_, q, [this, circuit](const uint8_t* p, size_t n, const Addr&){ return sendData(circuit, p, n); });
+    ch.attach(conns_[ci].sock, q, [this, ci, circuit](const uint8_t* p, size_t n, const Addr&){ return sendData(ci, circuit, p, n); });
 }
 
 void RelayLink::close(UdpSocket& ch){
     uint64_t c = 0;
+    int ci = 0;
     bool found = false;
     {
         std::lock_guard<std::mutex> g(circMu_);
         for(auto it = circuits_.begin(); it != circuits_.end(); ++it){
             if(it->second.ch != &ch) continue;
             c = it->first;
+            ci = it->second.ci;
             it->second.q->shut();
             circuits_.erase(it);
             found = true;
@@ -415,7 +517,7 @@ void RelayLink::close(UdpSocket& ch){
     if(found){
         uint8_t body[8];
         putU64(body, c);
-        sendControl(kClose, body, sizeof body);
+        sendControl(ci, kClose, body, sizeof body);
     }
     ch.close();
 }
@@ -427,7 +529,7 @@ void RelayLink::wake(UdpSocket& ch){
 
 bool connectMasked(RelayLink& link, UdpSocket& ch, const Identity& me, const std::string& friendName, const uint8_t friendPub[32],
                    const std::string& myCaps, Session& out, std::string& peerCaps, std::string& err,
-                   const std::function<void(const std::string&)>& status, const std::atomic<bool>* cancel){
+                   const std::function<void(const std::string&)>& status, const std::atomic<bool>* cancel, bool masked){
     if(!link.ready()) status("connecting to the StarCom network...");
     if(!link.waitReady(30000, cancel)){
         err = cancelled(cancel) ? std::string("cancelled") : link.failed() ? link.note() : std::string("could not reach the StarCom network");
@@ -448,7 +550,7 @@ bool connectMasked(RelayLink& link, UdpSocket& ch, const Identity& me, const std
         }
         saidMissing = false;
         if(!saidFound){ status("found @" + friendName + "; connecting through the relays..."); saidFound = true; }
-        if(!link.open(rec, ch, e)){ pause(1000, cancel); continue; }
+        if(!link.open(rec, ch, e, masked)){ pause(1000, cancel); continue; }
         Session s;
         std::string caps;
         if(hsInitiate(ch, link.relay(), me, friendPub, myCaps, s, caps, e, 10000)){

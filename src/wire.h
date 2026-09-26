@@ -27,6 +27,8 @@ void writeHeader(uint8_t* p, PacketType t, Lane l);
 bool readHeader(const uint8_t* p, size_t n, Header& h);
 void putU64(uint8_t* p, uint64_t v);
 uint64_t getU64(const uint8_t* p);
+void putU32(uint8_t* p, uint32_t v);
+uint32_t getU32(const uint8_t* p);
 
 size_t encodeAddr(const Addr& a, uint8_t out[19]);
 bool decodeAddr(const uint8_t in[19], Addr& a);

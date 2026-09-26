@@ -7,6 +7,7 @@
 #define NOMINMAX
 #include <windows.h>
 #endif
+#include "bridge.h"
 #include "hubcli.h"
 #include "hwprobe.h"
 #include "engine.h"
@@ -46,6 +47,7 @@ static int usage(){
         "  starcom chat @name         chat with a friend; neither of you can see the other's IP address\n"
         "  starcom call @name         the same, and ring your friend straight away (use headphones)\n"
         "  starcom hub                your hubs in the console: create, join, talk, voice channels\n"
+        "  starcom volunteer [on|off|run]  help carry other people's encrypted messages (off by default)\n"
         "  starcom id                 show your friend code\n"
         "  starcom probe              show your hardware video encoders\n"
         "  starcom seed               look up this copy's network entry points\n"
@@ -160,11 +162,13 @@ static int cmdName(const std::string& arg){
     return 0;
 }
 
-static bool findPin(const std::string& name, uint8_t pub[32]){
+static bool findPin(const std::string& name, uint8_t pub[32], bool& met){
     std::ifstream f(FRIENDS_FILE);
     std::string line;
     while(std::getline(f, line)){
         while(!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        met = line.size() > 5 && line.compare(line.size() - 5, 5, " +met") == 0;
+        if(met) line.resize(line.size() - 5);
         size_t a = line.find(' ');
         if(a == std::string::npos) continue;
         size_t b = line.rfind(' ');
@@ -177,6 +181,78 @@ static bool findPin(const std::string& name, uint8_t pub[32]){
 static void savePin(const std::string& code, const std::string& name){
     std::ofstream f(FRIENDS_FILE, std::ios::app);
     f << code << ' ' << name << ' ' << name << '\n';
+}
+
+static void markMet(const uint8_t pub[32]){
+    std::ifstream in(FRIENDS_FILE);
+    std::string line, all;
+    bool changed = false;
+    while(std::getline(in, line)){
+        while(!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if(line.empty()) continue;
+        size_t a = line.find(' ');
+        uint8_t k[32];
+        bool met = line.size() > 5 && line.compare(line.size() - 5, 5, " +met") == 0;
+        if(!met && parseFriendCode(a == std::string::npos ? line : line.substr(0, a), k) && std::memcmp(k, pub, 32) == 0){ line += " +met"; changed = true; }
+        all += line + "\n";
+    }
+    in.close();
+    if(!changed) return;
+    std::string tmp = std::string(FRIENDS_FILE) + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        out << all;
+        if(!out) return;
+    }
+    replaceFile(tmp, FRIENDS_FILE);
+}
+
+static const char* VOLUNTEER_FILE = "volunteer.txt";
+
+static int cmdVolunteer(const std::string& arg){
+    const char* what = "Volunteering means carrying other people's encrypted messages while StarCom is open, using up to 2 Mbps of your upload.\n"
+                       "You only pass along encrypted data you cannot read. Only the StarCom entry relays learn your IP address; other users never do.\n";
+    if(arg == "on" || arg == "off"){
+        std::string tmp = std::string(VOLUNTEER_FILE) + ".tmp";
+        {
+            std::ofstream f(tmp, std::ios::trunc);
+            f << arg << '\n';
+            if(!f){ std::fprintf(stderr, "could not save the setting\n"); return 1; }
+        }
+        if(!replaceFile(tmp, VOLUNTEER_FILE)){ std::fprintf(stderr, "could not save the setting\n"); return 1; }
+        std::printf("Volunteering is now %s. It applies whenever the StarCom window or 'starcom hub' is open.\n%s", arg.c_str(), arg == "on" ? what : "");
+        return 0;
+    }
+    if(arg == "run"){
+        consoleInit();
+        consolePrint(std::string(what) + "Helping the StarCom network now. Type /quit to stop.\n");
+        BridgeHost bridge;
+        bridge.start(2000);
+        LineInput input;
+        input.start();
+        auto last = std::chrono::steady_clock::now();
+        for(;;){
+            std::string line;
+            bool stop = false;
+            while(input.next(line)) if(line == "/quit" || line == "q") stop = true;
+            if(stop || input.closed()) break;
+            if(std::chrono::steady_clock::now() - last >= std::chrono::seconds(10)){
+                last = std::chrono::steady_clock::now();
+                BridgeStats st = bridge.stats();
+                consolePrint("* relays " + std::to_string(st.relays) + ", conversations " + std::to_string(st.pairs) + ", " + std::to_string(st.kbps) + " kbps, " + std::to_string(st.bytes / 1024) + " KB carried\n");
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        bridge.stop();
+        consolePrint("* stopped\n");
+        return 0;
+    }
+    if(!arg.empty()){ std::fprintf(stderr, "use: starcom volunteer [on|off|run]\n"); return 1; }
+    std::ifstream f(VOLUNTEER_FILE);
+    std::string v;
+    bool on = std::getline(f, v) && v.compare(0, 2, "on") == 0;
+    std::printf("Volunteering is %s.\n%s'starcom volunteer on' or 'off' changes it; 'starcom volunteer run' helps right now in this window.\n", on ? "on" : "off", what);
+    return 0;
 }
 
 static int cmdChatName(const std::string& arg, bool voice){
@@ -196,7 +272,8 @@ static int cmdChatName(const std::string& arg, bool voice){
     std::printf("You are @%s (%s)\n", mine.c_str(), friendCode(id.pub).c_str());
     std::string err;
     uint8_t pin[32];
-    if(!findPin(fname, pin)){
+    bool met = false;
+    if(!findPin(fname, pin, met)){
         consolePrint("* connecting to the StarCom network...\n");
         if(!link.waitReady(30000, nullptr)){ identityWipe(id); std::fprintf(stderr, "%s\n", link.note().c_str()); return 1; }
         PointerRecord rec;
@@ -251,7 +328,7 @@ static int cmdChatName(const std::string& arg, bool voice){
     });
     if(!lower) for(int i = 0; i < 50 && !adopted; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     bool ok = false;
-    if(!adopted) ok = connectMasked(link, *ch, id, fname, pin, myCaps, ses, peerCaps, err, [](const std::string& m){ consolePrint("* " + m + "\n"); }, &adopted);
+    if(!adopted) ok = connectMasked(link, *ch, id, fname, pin, myCaps, ses, peerCaps, err, [](const std::string& m){ consolePrint("* " + m + "\n"); }, &adopted, !met);
     int rc = 1;
     bool first = true;
     LineInput input;
@@ -273,6 +350,7 @@ static int cmdChatName(const std::string& arg, bool voice){
         }
         if(!ok) break;
         if(first) std::printf("Connected to @%s through the relays (neither of you can see the other's IP address)\n  friend code: %s\n  negotiated video codec: %s\n", fname.c_str(), friendCode(ses.peerPub).c_str(), negotiate(myCaps, peerCaps).c_str());
+        if(!met){ markMet(pin); met = true; }
         else consolePrint("* switched to @" + fname + "'s connection (you both connected at once)\n");
         bool startCall = voice && first;
         first = false;
@@ -299,7 +377,7 @@ static int cmdChatName(const std::string& arg, bool voice){
         if(!pend){
             consolePrint("* the conversation was closed; trying to reach @" + fname + " again (up to 2 minutes)...\n");
             adopted = false;
-            ok = connectMasked(link, *ch, id, fname, pin, myCaps, ses, peerCaps, err, [](const std::string& m){ consolePrint("* " + m + "\n"); }, &adopted);
+            ok = connectMasked(link, *ch, id, fname, pin, myCaps, ses, peerCaps, err, [](const std::string& m){ consolePrint("* " + m + "\n"); }, &adopted, !met);
             std::lock_guard<std::mutex> g(pm);
             if(!ok && !havePend) break;
         }
@@ -346,6 +424,7 @@ int main(int argc, char** argv){
     else if(cmd == "chat" && argc > 2) rc = cmdChatName(argv[2], false);
     else if(cmd == "call" && argc > 2) rc = cmdChatName(argv[2], true);
     else if(cmd == "hub") rc = runHubConsole();
+    else if(cmd == "volunteer") rc = cmdVolunteer(argc > 2 ? std::string(argv[2]) : std::string());
     else if(cmd == "relay" && argc > 2) rc = runRelay((uint16_t)std::atoi(argv[2]));
     else rc = usage();
     netShutdown();

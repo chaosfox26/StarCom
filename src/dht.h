@@ -26,6 +26,9 @@ struct PointerRecord {
     uint32_t expires = 0;
     Addr relay;
     uint8_t relayPub[32] = {0};
+    int relays = 1;
+    Addr relay2;
+    uint8_t relayPub2[32] = {0};
 };
 
 bool normalizeName(const std::string& in, std::string& out);

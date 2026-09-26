@@ -21,6 +21,7 @@ const uint32_t kRefreshMs = 60 * 60 * 1000;
 const size_t kMaxRecords = 10000;
 const size_t kMaxRateEntries = 8192;
 const char kMagic[4] = {'S', 'C', 'P', '2'};
+const char kMagic3[4] = {'S', 'C', 'P', '3'};
 
 uint32_t nowMs(){
     return (uint32_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -93,26 +94,36 @@ void nameKey(const std::string& name, uint8_t key[32]){
 size_t signPointer(const Identity& id, const PointerRecord& r, uint8_t* out, size_t cap){
     std::string name;
     if(!normalizeName(r.name, name)) return 0;
-    size_t n = 4 + 32 + 1 + name.size() + 8 + 4 + 19 + 32;
+    bool two = r.relays == 2;
+    size_t n = 4 + 32 + 1 + name.size() + 8 + 4 + (two ? 1 + 2 * (19 + 32) : 19 + 32);
     if(n + 64 > cap || n + 64 > kMaxPointerLen) return 0;
     uint8_t* p = out;
-    std::memcpy(p, kMagic, 4); p += 4;
+    std::memcpy(p, two ? kMagic3 : kMagic, 4); p += 4;
     std::memcpy(p, id.pub, 32); p += 32;
     *p++ = (uint8_t)name.size();
     std::memcpy(p, name.data(), name.size()); p += name.size();
     putU64(p, r.seq); p += 8;
     put32(p, r.expires); p += 4;
+    if(two) *p++ = 2;
     if(!encodeAddr(r.relay, p)) return 0;
     p += 19;
     std::memcpy(p, r.relayPub, 32);
+    p += 32;
+    if(two){
+        if(!encodeAddr(r.relay2, p)) return 0;
+        p += 19;
+        std::memcpy(p, r.relayPub2, 32);
+    }
     crypto_ed25519_sign(out + n, id.secret, out, n);
     return n + 64;
 }
 
 bool openPointer(const uint8_t* in, size_t n, uint32_t nowSec, PointerRecord& r){
-    if(n < 4 + 32 + 1 + 3 + 8 + 4 + 19 + 32 + 64 || n > kMaxPointerLen || std::memcmp(in, kMagic, 4) != 0) return false;
+    if(n < 4 + 32 + 1 + 3 + 8 + 4 + 19 + 32 + 64 || n > kMaxPointerLen) return false;
+    bool two = std::memcmp(in, kMagic3, 4) == 0;
+    if(!two && std::memcmp(in, kMagic, 4) != 0) return false;
     size_t nameLen = in[36];
-    size_t body = 37 + nameLen + 8 + 4 + 19 + 32;
+    size_t body = 37 + nameLen + 8 + 4 + (two ? 1 + 2 * (19 + 32) : 19 + 32);
     if(nameLen < 3 || nameLen > 32 || body + 64 != n) return false;
     if(crypto_ed25519_check(in + body, in + 4, in, body) != 0) return false;
     std::string raw((const char*)in + 37, nameLen), norm;
@@ -123,8 +134,19 @@ bool openPointer(const uint8_t* in, size_t n, uint32_t nowSec, PointerRecord& r)
     t.seq = getU64(in + 37 + nameLen);
     t.expires = get32(in + 37 + nameLen + 8);
     if(t.expires + kPointerSlackSec < nowSec || t.expires > nowSec + kPointerMaxLifeSec + kPointerSlackSec) return false;
-    if(!decodeAddr(in + 37 + nameLen + 12, t.relay)) return false;
-    std::memcpy(t.relayPub, in + 37 + nameLen + 31, 32);
+    const uint8_t* q = in + 37 + nameLen + 12;
+    if(two){
+        if(*q != 2) return false;
+        q++;
+        t.relays = 2;
+    }
+    if(!decodeAddr(q, t.relay)) return false;
+    std::memcpy(t.relayPub, q + 19, 32);
+    if(two){
+        if(!decodeAddr(q + 51, t.relay2)) return false;
+        std::memcpy(t.relayPub2, q + 70, 32);
+        if(std::memcmp(t.relayPub, t.relayPub2, 32) == 0) return false;
+    }
     r = t;
     return true;
 }

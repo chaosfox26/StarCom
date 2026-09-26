@@ -1,5 +1,6 @@
 #pragma once
 #include "audio.h"
+#include "bridge.h"
 #include "handshake.h"
 #include "hub.h"
 #include "identity.h"
@@ -61,6 +62,7 @@ struct Friend {
     LinkState state = LinkState::Idle;
     std::string status;
     int unread = 0;
+    bool met = false;
 };
 
 struct HubChannelLines {
@@ -135,6 +137,10 @@ public:
     void hubVoiceMute();
     void hubVoiceDeafen();
 
+    bool volunteer() const { return volunteer_; }
+    bool setVolunteer(bool on, std::string& err);
+    BridgeStats bridgeStats() { return bridge_.stats(); }
+
     bool pump();
     void shutdown();
     std::function<void()> wake;
@@ -182,6 +188,7 @@ private:
     std::deque<Event> events_;
     std::mutex pubsMu_;
     std::vector<std::string> friendKeys_;
+    std::vector<std::string> metKeys_;
     std::mutex inMu_;
     std::condition_variable inCv_;
     std::deque<uint64_t> inQ_;
@@ -209,6 +216,9 @@ private:
     std::atomic<bool> nameChanged_{false};
     std::map<std::string, std::pair<int, std::string>> hubUp_;
 
+    BridgeHost bridge_;
+    bool volunteer_ = false;
+
     std::mutex voiceMu_;
     bool voiceOn_ = false;
     uint8_t voiceHub_[32] = {0};
@@ -225,6 +235,7 @@ private:
     void saveFriends();
     void syncFriendKeys();
     bool isFriendKey(const std::string& key);
+    bool isMetKey(const std::string& key);
     size_t friendIdx(const std::string& key) const;
     void acceptLoop();
     std::shared_ptr<Peer> startPeer(const std::string& key, const std::string& name, const std::string& capsHint, std::shared_ptr<Adopt> adopt);

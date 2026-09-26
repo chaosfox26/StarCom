@@ -47,6 +47,16 @@ uint64_t getU64(const uint8_t* p){
     return v;
 }
 
+void putU32(uint8_t* p, uint32_t v){
+    for(int i = 0; i < 4; i++){ p[i] = (uint8_t)v; v >>= 8; }
+}
+
+uint32_t getU32(const uint8_t* p){
+    uint32_t v = 0;
+    for(int i = 3; i >= 0; i--) v = (v << 8) | p[i];
+    return v;
+}
+
 namespace {
 
 bool isV4Mapped(const uint8_t* a){

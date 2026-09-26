@@ -26,6 +26,11 @@ StarCom is built with AI, openly (see README.md). This early prototype does dire
    - Click a # channel to talk. Click a voice channel to join it; DISCONNECT in the voice panel leaves it.
    - Hub settings (in the "..." menu) adds channels, makes admins, kicks and bans.
 
+## Helping the network (optional)
+- In the window: Settings (the gear), then "Help the network", then On. It is off unless you turn it on.
+- On the command line: `starcom volunteer on` or `off`; `starcom volunteer` shows the setting; `starcom volunteer run` helps right now and shows what it carries every 10 seconds (type `/quit` to stop).
+- A volunteer carries only other people's encrypted packets between StarCom's entry relays, up to 2 Mbps. Other users never learn a volunteer's IP address, and a volunteer never learns theirs.
+
 ## Command line (Windows and Linux)
 - Choose your @name once:
 

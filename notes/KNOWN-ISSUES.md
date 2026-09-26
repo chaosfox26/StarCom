@@ -1,6 +1,8 @@
 # Known issues (prototype)
 
-- **One relay today.** The network has one relay for now, so that relay sees both people's addresses in every conversation (never the content). Planned: as more relays join, StarCom will prefer a relay different from your friend's, so that no single relay sees both ends.
+- **One relay today.** The network has one relay for now, so that relay sees both people's addresses in every conversation (never the content). StarCom is ready for more: with two or more entry relays it links to two of them and picks different relays for the two people, so that no single relay sees both ends.
+- **Volunteer bridges add no privacy yet.** While there is one entry relay, a conversation carried by a volunteer bridge is still fully visible to that relay as "who talks to whom" (never the content). Bridges follow SPEC section 5 now and become useful once there are two or more entry relays.
+- **A volunteer bridge can start a conversation without an @name.** Someone running a bridge could send a conversation request to a person whose key they know, without registering an @name. That is no more than anyone can do by making a new free identity, and requests from people you have not added are limited (at most 5 are shown at a time, each for 60 seconds). It never reveals anyone's IP address.
 - **Reconnecting after a restart takes a few seconds.** If your friend closes and reopens StarCom, the relay hands any conversation that was waiting for them to their new StarCom, and new ones start fresh: reconnecting takes about 1 to 3 seconds (measured). A chat that was open at that moment ends and starts again.
 - **Relay link lost = chats end.** If your link to your relay drops (for example, your internet goes away for more than a minute), open chats and calls end and StarCom reconnects by itself. Click your friend again to continue.
 - **Calls need headphones:** there is no echo cancellation yet.

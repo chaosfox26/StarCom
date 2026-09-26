@@ -57,6 +57,7 @@
 - change your @name;
 - your friend code (with Copy);
 - the data folder;
+- Help the network: an On/Off button (off by default) with a plain warning (up to 2 Mbps of upload, encrypted data you cannot read, only the StarCom entry relays learn your IP address) and a live line ("Helping now: N conversations through M relays, X kbps");
 - About, with the AI statement.
 
 ## What each colour means

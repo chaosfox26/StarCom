@@ -21,6 +21,8 @@ namespace {
 const char* kIdFile = "identity.key";
 const char* kFriends = "friends.txt";
 const char* kNameFile = "name.txt";
+const char* kVolunteerFile = "volunteer.txt";
+const int kVolunteerKbps = 2000;
 
 enum Kind { kStatus = 0, kIncoming = 1, kConnected = 2, kEnded = 4, kPeerLeft = 5, kFound = 6, kAdoptEv = 7, kRequestEv = 8,
             kChecked = 9, kTick = 10, kHubChanged = 11, kWant = 12, kHubNote = 13, kInvite = 14, kHubInfo = 15, kSessionReq = 16 };
@@ -153,9 +155,12 @@ bool NetHub::start(std::string& err){
     std::string line;
     while(std::getline(f, line)){
         while(!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        bool met = line.size() > 5 && line.compare(line.size() - 5, 5, " +met") == 0;
+        if(met) line.resize(line.size() - 5);
         size_t a = line.find(' ');
         std::string code = a == std::string::npos ? line : line.substr(0, a);
         Friend fr;
+        fr.met = met;
         if(!parseFriendCode(code, fr.pub)) continue;
         std::string rest = a == std::string::npos ? std::string() : line.substr(a + 1);
         size_t b = rest.rfind(' ');
@@ -177,6 +182,26 @@ bool NetHub::start(std::string& err){
     link_.start(id_, myName_);
     acceptor_ = std::thread([this]{ acceptLoop(); });
     hubThread_ = std::thread([this]{ hubLoop(); });
+    {
+        std::ifstream vf(kVolunteerFile);
+        std::string v;
+        volunteer_ = std::getline(vf, v) && v.compare(0, 2, "on") == 0;
+    }
+    if(volunteer_) bridge_.start(kVolunteerKbps);
+    return true;
+}
+
+bool NetHub::setVolunteer(bool on, std::string& err){
+    std::string tmp = std::string(kVolunteerFile) + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::trunc);
+        f << (on ? "on" : "off") << '\n';
+        if(!f){ err = "Could not save the setting."; return false; }
+    }
+    if(!replaceFile(tmp, kVolunteerFile)){ err = "Could not save the setting."; return false; }
+    volunteer_ = on;
+    if(on) bridge_.start(kVolunteerKbps);
+    else bridge_.stop();
     return true;
 }
 
@@ -218,7 +243,17 @@ std::string NetHub::nameNow() const {
 void NetHub::syncFriendKeys(){
     std::lock_guard<std::mutex> g(pubsMu_);
     friendKeys_.clear();
-    for(const Friend& fr : friends_) friendKeys_.push_back(keyStr(fr.pub));
+    metKeys_.clear();
+    for(const Friend& fr : friends_){
+        friendKeys_.push_back(keyStr(fr.pub));
+        if(fr.met) metKeys_.push_back(keyStr(fr.pub));
+    }
+}
+
+bool NetHub::isMetKey(const std::string& key){
+    std::lock_guard<std::mutex> g(pubsMu_);
+    for(const std::string& k : metKeys_) if(k == key) return true;
+    return false;
 }
 
 bool NetHub::isFriendKey(const std::string& key){
@@ -236,7 +271,7 @@ void NetHub::saveFriends(){
     std::string tmp = std::string(kFriends) + ".tmp";
     {
         std::ofstream f(tmp, std::ios::trunc);
-        for(const Friend& fr : friends_) f << fr.code << ' ' << fr.nick << (fr.name.empty() ? std::string() : " " + fr.name) << '\n';
+        for(const Friend& fr : friends_) f << fr.code << ' ' << fr.nick << (fr.name.empty() ? std::string() : " " + fr.name) << (fr.met ? " +met" : "") << '\n';
         if(!f) return;
     }
     replaceFile(tmp, kFriends);
@@ -428,7 +463,7 @@ void NetHub::run(std::shared_ptr<Peer> p){
         sessionWipe(p->adopt->ses);
     } else {
         bool ok = connectMasked(link_, *p->ch, id_, p->name, p->key, withHint(capsNow(), p->capsHint), ses, caps, err,
-                                [this, key, g](const std::string& m){ post(key, kStatus, m, g); }, &p->quit);
+                                [this, key, g](const std::string& m){ post(key, kStatus, m, g); }, &p->quit, !isFriendKey(key) || !isMetKey(key));
         if(!ok || p->quit){
             if(ok) sessionWipe(ses);
             link_.close(*p->ch);
@@ -1229,7 +1264,15 @@ bool NetHub::pump(){
             if(f.lines.size() > 5000) f.lines.erase(f.lines.begin(), f.lines.begin() + 1000);
             f.unread++;
             break; }
-        case kConnected: f.state = LinkState::Connected; f.status = kConnectedText; break;
+        case kConnected:
+            f.state = LinkState::Connected;
+            f.status = kConnectedText;
+            if(!f.met){
+                f.met = true;
+                saveFriends();
+                syncFriendKeys();
+            }
+            break;
         case kEnded:
         case kPeerLeft: {
             f.state = LinkState::Ended;
@@ -1248,6 +1291,7 @@ bool NetHub::pump(){
 }
 
 void NetHub::shutdown(){
+    bridge_.stop();
     quit_ = true;
     inCv_.notify_all();
     hubCv_.notify_all();
