@@ -20,3 +20,4 @@
    - Messages and calls are end-to-end encrypted between the people in them.
    - No age checks, ID checks, face scans or verification of any kind, because we never collect the data they would need.
 7. Good neighbor protocol. StarCom is lightweight from the ground up: minimal CPU, memory, disk, battery and bandwidth use, and maximum efficiency on every kind of network (slow, metered, mobile, congested). It never floods a network, never hogs a machine, backs off when a link is busy, and stays quiet when idle.
+8. No AI integration. StarCom contains no AI features, no models (including the neural-network parts of libraries, which are left out of the build), and never sends anything to an AI service. AI is used only to help write the code, and README.md says so.
