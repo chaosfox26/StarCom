@@ -109,7 +109,7 @@ bool hsInitiate(UdpSocket& s, const Addr& to, const Identity& me, const uint8_t 
     return true;
 }
 
-bool hsRespond(UdpSocket& s, const Identity& me, const std::string& myCaps, Session& out, std::string& peerCaps, std::string& err, int timeoutMs){
+bool hsRespond(UdpSocket& s, const Identity& me, const std::string& myCaps, Session& out, std::string& peerCaps, std::string& err, int timeoutMs, const uint8_t* onlyPeer){
     if(myCaps.size() + 8 > kMaxHsPayload){ err = "capability data is too large"; return false; }
     StaticKey mine;
     if(!staticOf(me, mine)){ err = "identity key is unusable"; return false; }
@@ -138,6 +138,7 @@ bool hsRespond(UdpSocket& s, const Identity& me, const std::string& myCaps, Sess
             uint8_t conv[32];
             x25519FromEdPub(body + 8, conv);
             if(theirId == 0 || theirId != getU64(in + kHeaderLen) || crypto_verify32(conv, hs.remoteStatic()) != 0) continue;
+            if(onlyPeer && crypto_verify32(onlyPeer, body + 8) != 0) continue;
             Seen* prior = nullptr;
             for(Seen& e : seen) if(crypto_verify32(e.key, hs.remoteStatic()) == 0) prior = &e;
             if(prior && stamp <= prior->stamp) continue;

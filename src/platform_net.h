@@ -21,6 +21,8 @@ struct Addr {
 };
 
 bool resolve(const std::string& host, uint16_t port, std::vector<Addr>& out, std::string& err);
+bool localAddressFor(const Addr& remote, uint16_t port, Addr& out);
+void addrSetPort(Addr& a, uint16_t port);
 
 class UdpSocket {
 public:

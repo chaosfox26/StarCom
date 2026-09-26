@@ -18,7 +18,7 @@ void writeHeader(uint8_t* p, PacketType t, Lane l){
 
 bool readHeader(const uint8_t* p, size_t n, Header& h){
     if(n < kHeaderLen || p[0] != 'S' || p[1] != 'C' || p[2] != kWireVersion) return false;
-    if(p[3] < (uint8_t)PacketType::Hello || p[3] > (uint8_t)PacketType::Data) return false;
+    if(p[3] < (uint8_t)PacketType::Hello || p[3] > (uint8_t)PacketType::Relay) return false;
     if(p[4] > (uint8_t)Lane::Background || p[5] || p[6] || p[7]) return false;
     h.type = (PacketType)p[3];
     h.lane = (Lane)p[4];

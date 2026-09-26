@@ -17,7 +17,7 @@ struct Session {
 };
 
 bool hsInitiate(UdpSocket& s, const Addr& to, const Identity& me, const uint8_t peerPub[32], const std::string& myCaps, Session& out, std::string& peerCaps, std::string& err, int timeoutMs);
-bool hsRespond(UdpSocket& s, const Identity& me, const std::string& myCaps, Session& out, std::string& peerCaps, std::string& err, int timeoutMs);
+bool hsRespond(UdpSocket& s, const Identity& me, const std::string& myCaps, Session& out, std::string& peerCaps, std::string& err, int timeoutMs, const uint8_t* onlyPeer = nullptr);
 bool sessionSeal(Session& s, Lane lane, const uint8_t* plain, size_t n, uint8_t* out, size_t cap, size_t& outLen);
 bool sessionOpen(Session& s, const uint8_t* pkt, size_t n, const Addr& from, Lane& lane, uint8_t* out, size_t cap, size_t& outLen);
 void sessionWipe(Session& s);

@@ -107,6 +107,27 @@ bool resolve(const std::string& host, uint16_t port, std::vector<Addr>& out, std
     return true;
 }
 
+bool localAddressFor(const Addr& remote, uint16_t port, Addr& out){
+    sock_t s = ::socket(remote.family(), SOCK_DGRAM, IPPROTO_UDP);
+    if(s == BAD_SOCK) return false;
+    bool ok = ::connect(s, (const sockaddr*)remote.raw, remote.len) == 0;
+    sockaddr_storage ss;
+    socklen_t sl = sizeof ss;
+    if(ok) ok = getsockname(s, (sockaddr*)&ss, &sl) == 0;
+    closeSock(s);
+    if(!ok) return false;
+    size_t cl = (size_t)sl < sizeof out.raw ? (size_t)sl : sizeof out.raw;
+    std::memcpy(out.raw, &ss, cl);
+    out.len = (int)cl;
+    addrSetPort(out, port);
+    return true;
+}
+
+void addrSetPort(Addr& a, uint16_t port){
+    if(a.family() == AF_INET) ((sockaddr_in*)a.raw)->sin_port = htons(port);
+    else if(a.family() == AF_INET6) ((sockaddr_in6*)a.raw)->sin6_port = htons(port);
+}
+
 UdpSocket::UdpSocket() : s_((intptr_t)BAD_SOCK) {}
 UdpSocket::~UdpSocket(){ close(); }
 

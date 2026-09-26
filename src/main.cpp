@@ -3,10 +3,13 @@
 #include "handshake.h"
 #include "hwprobe.h"
 #include "identity.h"
+#include "p2p.h"
+#include "rendezvous.h"
 #include "platform_net.h"
 #include "seed.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -17,11 +20,14 @@ static const char* CONF_FILE = "starcom.conf";
 
 static int usage(){
     std::printf(
-        "StarCom sprint 2\n"
+        "StarCom sprint 3\n"
         "  starcom id                          create or show your identity and friend code\n"
         "  starcom probe                       show hardware video encoders and the capability JSON\n"
         "  starcom seed [name]                 look up the seed name (default: seed= in starcom.conf)\n"
         "  starcom listen <port>               wait for one peer and complete a handshake\n"
+        "  starcom chat <friend code>          find a friend through the meeting point and chat\n"
+        "                                      (needs rendezvous=<host>:<port> in starcom.conf)\n"
+        "  starcom rendezvous <port>           run a meeting point + relay (keeps nothing on disk, no logs)\n"
         "  starcom connect <host|seed> <port> <friend code>\n"
         "                                      handshake with a listening peer\n");
     return 2;
@@ -158,6 +164,37 @@ static int cmdConnect(const std::string& host, const std::string& portArg, const
     return 1;
 }
 
+static int cmdChat(const std::string& code){
+    uint8_t friendPub[32];
+    if(!parseFriendCode(code, friendPub)){ std::fprintf(stderr, "that is not a valid friend code\n"); return 1; }
+    std::string rv = configValue(CONF_FILE, "rendezvous");
+    size_t colon = rv.rfind(':');
+    if(rv.empty() || colon == std::string::npos){ std::fprintf(stderr, "set rendezvous=<host>:<port> in %s (the address comes from whoever runs your meeting point)\n", CONF_FILE); return 1; }
+    int port = std::atoi(rv.substr(colon + 1).c_str());
+    std::vector<Addr> addrs;
+    std::string err;
+    if(port <= 0 || port > 65535 || !resolve(rv.substr(0, colon), (uint16_t)port, addrs, err)){ std::fprintf(stderr, "cannot resolve the meeting point: %s\n", err.c_str()); return 1; }
+    Addr server = addrs[0];
+    for(const Addr& a : addrs) if(a.family() == familyV4()){ server = a; break; }
+    Identity id;
+    if(!loadId(id)) return 1;
+    if(std::memcmp(id.pub, friendPub, 32) == 0){ identityWipe(id); std::fprintf(stderr, "that is your own friend code\n"); return 1; }
+    std::string myCaps = capsJson(probeHardware());
+    UdpSocket s;
+    if(!s.open(server.family(), 0, err)){ identityWipe(id); std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    std::printf("You are %s\n", friendCode(id.pub).c_str());
+    Session ses;
+    std::string peerCaps;
+    bool hideIp = configValue(CONF_FILE, "hideip") == "1";
+    bool ok = connectFriend(s, id, friendPub, server, myCaps, hideIp, ses, peerCaps, err, [](const std::string& m){ consolePrint("* " + m + "\n"); });
+    identityWipe(id);
+    if(!ok){ std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    report(ses, myCaps, peerCaps);
+    int rc = chatWith(s, ses);
+    sessionWipe(ses);
+    return rc;
+}
+
 int main(int argc, char** argv){
     if(argc < 2) return usage();
     consoleInit();
@@ -169,6 +206,8 @@ int main(int argc, char** argv){
     else if(cmd == "seed") rc = cmdSeed(argc > 2 ? argv[2] : "");
     else if(cmd == "listen" && argc > 2) rc = cmdListen(argv[2]);
     else if(cmd == "connect" && argc > 4) rc = cmdConnect(argv[2], argv[3], argv[4]);
+    else if(cmd == "chat" && argc > 2) rc = cmdChat(argv[2]);
+    else if(cmd == "rendezvous" && argc > 2) rc = runRendezvous((uint16_t)std::atoi(argv[2]));
     else rc = usage();
     netShutdown();
     return rc;

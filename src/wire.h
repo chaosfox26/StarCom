@@ -5,7 +5,7 @@
 namespace sc {
 
 enum class Lane : uint8_t { Voice = 0, Signal = 1, Video = 2, Background = 3 };
-enum class PacketType : uint8_t { Hello = 1, Welcome = 2, Data = 3 };
+enum class PacketType : uint8_t { Hello = 1, Welcome = 2, Data = 3, Rendezvous = 4, Relay = 5 };
 
 constexpr uint8_t kWireVersion = 1;
 constexpr size_t kHeaderLen = 8;
