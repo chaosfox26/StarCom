@@ -1,10 +1,19 @@
+#include "call.h"
 #include "chat.h"
 #include "console.h"
 #include "exitguard.h"
+#ifdef _WIN32
+#include "gui/gui.h"
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#endif
 #include "handshake.h"
 #include "hwprobe.h"
 #include "identity.h"
 #include "p2p.h"
+#include "paths.h"
+#include "textsafe.h"
 #include "rendezvous.h"
 #include "platform_net.h"
 #include "seed.h"
@@ -18,15 +27,18 @@ using namespace sc;
 
 static const char* ID_FILE = "identity.key";
 static const char* CONF_FILE = "starcom.conf";
+static std::string g_dataWhere;
 
 static int usage(){
     std::printf(
-        "StarCom sprint 3\n"
+        "StarCom\n"
+        "  starcom                             open the StarCom window (Windows)\n"
         "  starcom id                          create or show your identity and friend code\n"
         "  starcom probe                       show hardware video encoders and the capability JSON\n"
         "  starcom seed [name]                 look up the seed name (default: seed= in starcom.conf)\n"
         "  starcom listen <port>               wait for one peer and complete a handshake\n"
         "  starcom chat <friend code>          find a friend through the meeting point and chat\n"
+        "  starcom call <friend code>          the same, then an encrypted voice call (Windows; use headphones)\n"
         "                                      (needs rendezvous=<host>:<port> in starcom.conf)\n"
         "  starcom rendezvous <port>           run a meeting point + relay (keeps nothing on disk, no logs)\n"
         "  starcom connect <host|seed> <port> <friend code>\n"
@@ -45,6 +57,7 @@ static bool loadId(Identity& id){
 static int cmdId(){
     Identity id;
     if(!loadId(id)) return 1;
+    if(!g_dataWhere.empty()) std::printf("StarCom data folder: %s\n", g_dataWhere.c_str());
     std::printf("Your friend code:\n  %s\n", friendCode(id.pub).c_str());
     identityWipe(id);
     return 0;
@@ -79,16 +92,6 @@ static int cmdSeed(const std::string& arg){
     return 0;
 }
 
-static std::string safeText(const std::string& in){
-    std::string o;
-    for(size_t i = 0; i < in.size(); i++){
-        unsigned char c = (unsigned char)in[i];
-        if(c == 0x7F || (c < 0x20 && c != '\t')){ o += '?'; continue; }
-        if(c == 0xC2 && i + 1 < in.size() && (unsigned char)in[i + 1] >= 0x80 && (unsigned char)in[i + 1] <= 0x9F){ o += '?'; i++; continue; }
-        o += (char)c;
-    }
-    return o;
-}
 
 static int chatWith(UdpSocket& s, Session& ses){
     std::string tag = friendCode(ses.peerPub).substr(0, 9);
@@ -165,12 +168,12 @@ static int cmdConnect(const std::string& host, const std::string& portArg, const
     return 1;
 }
 
-static int cmdChat(const std::string& code){
+static int cmdChat(const std::string& code, bool voice){
     uint8_t friendPub[32];
     if(!parseFriendCode(code, friendPub)){ std::fprintf(stderr, "that is not a valid friend code\n"); return 1; }
-    std::string rv = configValue(CONF_FILE, "rendezvous");
+    std::string rv = meetingPoint(CONF_FILE);
     size_t colon = rv.rfind(':');
-    if(rv.empty() || colon == std::string::npos){ std::fprintf(stderr, "set rendezvous=<host>:<port> in %s (the address comes from whoever runs your meeting point)\n", CONF_FILE); return 1; }
+    if(rv.empty() || colon == std::string::npos){ std::fprintf(stderr, "no meeting point: this build has none built in; put rendezvous=<host>:<port> in %s inside the StarCom data folder\n", CONF_FILE); return 1; }
     int port = std::atoi(rv.substr(colon + 1).c_str());
     std::vector<Addr> addrs;
     std::string err;
@@ -194,14 +197,30 @@ static int cmdChat(const std::string& code){
     identityWipe(id);
     if(!ok){ notice.send(); std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
     report(ses, myCaps, peerCaps);
-    int rc = chatWith(s, ses);
+    int rc = voice ? runCall(s, ses, friendCode(ses.peerPub).substr(0, 9)) : chatWith(s, ses);
     sessionWipe(ses);
     notice.send();
     return rc;
 }
 
 int main(int argc, char** argv){
+    std::string dataErr;
+    bool isServer = argc > 1 && std::string(argv[1]) == "rendezvous";
+    bool dataOk = isServer ? true : enterDataDir(g_dataWhere, dataErr);
+#ifdef _WIN32
+    if(argc < 2 || std::string(argv[1]) == "gui"){
+        DWORD procs[4];
+        if(GetConsoleProcessList(procs, 4) <= 1){
+            HWND con = GetConsoleWindow();
+            if(con) ShowWindow(con, SW_HIDE);
+            FreeConsole();
+        }
+        if(!dataOk){ MessageBoxA(nullptr, dataErr.c_str(), "StarCom", MB_ICONERROR); return 1; }
+        return runGui();
+    }
+#endif
     if(argc < 2) return usage();
+    if(!dataOk){ std::fprintf(stderr, "%s\n", dataErr.c_str()); return 1; }
     consoleInit();
     if(!netInit()){ std::fprintf(stderr, "network init failed\n"); return 1; }
     std::string cmd = argv[1];
@@ -211,7 +230,8 @@ int main(int argc, char** argv){
     else if(cmd == "seed") rc = cmdSeed(argc > 2 ? argv[2] : "");
     else if(cmd == "listen" && argc > 2) rc = cmdListen(argv[2]);
     else if(cmd == "connect" && argc > 4) rc = cmdConnect(argv[2], argv[3], argv[4]);
-    else if(cmd == "chat" && argc > 2) rc = cmdChat(argv[2]);
+    else if(cmd == "chat" && argc > 2) rc = cmdChat(argv[2], false);
+    else if(cmd == "call" && argc > 2) rc = cmdChat(argv[2], true);
     else if(cmd == "rendezvous" && argc > 2) rc = runRendezvous((uint16_t)std::atoi(argv[2]));
     else rc = usage();
     netShutdown();

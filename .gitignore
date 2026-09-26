@@ -24,3 +24,5 @@ desktop.ini
 identity.key
 starcom.conf
 *.key
+/Windows/
+/Linux/

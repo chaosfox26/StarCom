@@ -1,4 +1,5 @@
 #include "chat.h"
+#include "engine.h"
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -12,8 +13,6 @@ using Clock = std::chrono::steady_clock;
 
 enum Kind : uint8_t { kText = 1, kClose = 2, kPing = 3, kAck = 4 };
 
-const int kKeepaliveMs = 25000;
-const int kSilentMs = 75000;
 const int kFirstRtoMs = 500;
 const int kMaxRtoMs = 4000;
 const int kMaxTries = 10;
@@ -28,10 +27,6 @@ struct Pending {
     int rto = kFirstRtoMs;
     int tries = 0;
 };
-
-long long msSince(Clock::time_point t){
-    return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t).count();
-}
 
 struct Pacer {
     double tokens = 20;
@@ -49,12 +44,12 @@ struct Pacer {
 
 class Chat {
 public:
-    Chat(UdpSocket& s, Session& ses, ChatIO& io) : s_(s), ses_(ses), io_(io) {}
+    Chat(Engine& e, ChatIO& io) : e_(e), io_(io) {}
 
     bool run(std::string& err){
-        lastRecv_ = Clock::now();
-        lastSend_ = Clock::now();
-        uint8_t in[kMaxPacket], plain[kMaxPacket];
+        e_.onReceive(kChanChat, [this](Lane lane, const uint8_t* p, size_t n){
+            if(lane == Lane::Signal && !handle(p, n)) peerLeft_ = true;
+        });
         for(;;){
             std::string line;
             while(!closing_ && queue_.size() < kMaxQueued && io_.nextOutgoing && io_.nextOutgoing(line)){
@@ -74,6 +69,7 @@ public:
                 if(!queue_.empty() || !inFlight_.empty()) status(std::to_string(queue_.size() + inFlight_.size()) + " message(s) were not confirmed before leaving");
                 sendControl(kClose, 0);
                 sendControl(kClose, 0);
+                e_.flush(500);
                 status("you left the chat");
                 return true;
             }
@@ -96,28 +92,18 @@ public:
                 p.due = Clock::now() + std::chrono::milliseconds(p.rto);
                 if(p.rto < kMaxRtoMs) p.rto *= 2;
             }
-            if(msSince(lastSend_) >= kKeepaliveMs) sendControl(kPing, 0);
-            if(msSince(lastRecv_) >= kSilentMs){
-                err = "connection lost (no reply for " + std::to_string(kSilentMs / 1000) + " s)";
-                return false;
+            if(!e_.poll(50, err)) return false;
+            if(peerLeft_){
+                e_.flush(500);
+                return true;
             }
-            Addr from;
-            int r = s_.recvFrom(in, sizeof in, from, 50);
-            if(r <= 0) continue;
-            Lane lane;
-            size_t n = 0;
-            if(!sessionOpen(ses_, in, (size_t)r, from, lane, plain, sizeof plain, n)) continue;
-            lastRecv_ = Clock::now();
-            if(n == 0 || lane != Lane::Signal) continue;
-            if(!handle(plain, n)) return true;
         }
     }
 
 private:
-    UdpSocket& s_;
-    Session& ses_;
+    Engine& e_;
     ChatIO& io_;
-    Clock::time_point lastRecv_, lastSend_;
+    bool peerLeft_ = false;
     std::deque<std::string> queue_;
     std::deque<Pending> inFlight_;
     std::map<uint64_t, std::string> early_;
@@ -132,11 +118,7 @@ private:
     }
 
     void send(const uint8_t* body, size_t n){
-        uint8_t pkt[kMaxPacket];
-        size_t len = 0;
-        if(!sessionSeal(ses_, Lane::Signal, body, n, pkt, sizeof pkt, len)) return;
-        s_.sendTo(pkt, len, ses_.peer);
-        lastSend_ = Clock::now();
+        e_.send(Lane::Signal, kChanChat, body, n);
     }
 
     void sendControl(Kind k, uint64_t seq){
@@ -186,9 +168,14 @@ private:
 
 }
 
-bool runChat(UdpSocket& s, Session& ses, ChatIO& io, std::string& err){
-    Chat chat(s, ses, io);
+bool runChatWith(Engine& e, ChatIO& io, std::string& err){
+    Chat chat(e, io);
     return chat.run(err);
+}
+
+bool runChat(UdpSocket& s, Session& ses, ChatIO& io, std::string& err){
+    Engine e(s, ses);
+    return runChatWith(e, io, err);
 }
 
 }

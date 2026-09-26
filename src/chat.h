@@ -13,6 +13,8 @@ struct ChatIO {
     std::function<void(const std::string&)> onStatus;
 };
 
+class Engine;
 bool runChat(UdpSocket& s, Session& ses, ChatIO& io, std::string& err);
+bool runChatWith(Engine& e, ChatIO& io, std::string& err);
 
 }

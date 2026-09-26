@@ -1,19 +1,27 @@
 # Testing StarCom (early prototype)
 
-StarCom is built with AI, openly (see README.md). This is a very early command-line prototype for testing text chat between two friends, on Windows or Linux. It has no window yet.
+StarCom is built with AI, openly (see README.md). This is a very early prototype for testing text chat between two friends. On Windows, double-click `starcom.exe` to open the StarCom window. The command-line commands below also work, on Windows and Linux.
 
 ## What you get
-- `starcom.exe`: the program (Windows, about 450 KB, nothing to install).
-- `starcom.conf`: a small settings file with the address of a meeting-point server. Whoever invited you gives you this file privately. StarCom has no built-in servers.
+- `starcom.exe`: the whole program in one file (Windows, under 1 MB, nothing to install). The copy you get from whoever invited you already knows which meeting point to use.
+- StarCom keeps its own files (your identity, your friends list) in its data folder: `%LOCALAPPDATA%\StarCom` on Windows, `~/.local/share/starcom` on Linux. Nothing is written next to the program.
 
-Put both in the same folder.
+## The window (Windows)
+1. Double-click `starcom.exe`.
+2. Your friend code is on the welcome screen: click Copy and send it to your friend.
+3. Click the + next to Direct Messages, paste your friend's code, give them a nickname, and click Add.
+4. Click their name. StarCom finds them through the meeting point (they need to have StarCom open too) and the status at the top shows when you are connected.
+5. Type in the box at the bottom and press Enter.
 
+The right-hand panel shows your connection type and who can see your IP address.
+
+## Command line
 ## 1. Get your friend code
 Open a Command Prompt in that folder and run:
 
     starcom id
 
-The first time, this creates `identity.key` in the folder: that file IS your identity.
+The first time, this creates `identity.key` in the StarCom data folder: that file IS your identity.
 - Keep it private and back it up.
 - Deleting it means your friend code is gone for good.
 
@@ -44,7 +52,7 @@ StarCom then never connects directly: your note carries no addresses of yours, a
 ## Linux
 - `starcom`: the Linux program (64-bit x86, about 1.3 MB, one file, nothing to install).
 - It needs a recent Linux: Ubuntu 23.10 or newer, Debian 13, Fedora 39 or newer (glibc 2.38+). On older systems, build it from the source instead: install a C++ compiler (for example `sudo apt install g++`), then run `sh build.sh` in the source folder; the program appears as `build/starcom`.
-- In a terminal in the folder with `starcom` and `starcom.conf`:
+- In a terminal in the folder with `starcom`:
 
       chmod +x starcom
       ./starcom id
@@ -61,5 +69,5 @@ StarCom then never connects directly: your note carries no addresses of yours, a
 ## If it does not connect
 - Check that both of you typed the other's code exactly.
 - Check that both started within 2 minutes of each other.
-- Check that `starcom.conf` is in the same folder as `starcom.exe`.
+- If StarCom says it has no meeting point, ask whoever gave it to you for a copy that has one (or put a `starcom.conf` with `rendezvous=<host>:<port>` in the StarCom data folder).
 - Some firewalls ask the first time whether to allow `starcom.exe`: allow it on private networks.

@@ -86,14 +86,16 @@ int waitBind(UdpSocket& s, const Addr& server, int timeoutMs){
     return 0;
 }
 
+bool isCancelled(const std::atomic<bool>* c){ return c && c->load(); }
+
 bool handshakeWith(UdpSocket& s, const Identity& me, const uint8_t friendPub[32], bool initiator,
                    const std::vector<Addr>& targets, bool punchTargets, const std::string& myCaps, Session& out,
-                   std::string& peerCaps, std::string& err, int totalMs){
+                   std::string& peerCaps, std::string& err, int totalMs, const std::atomic<bool>* cancel){
     auto start = Clock::now();
     if(initiator){
-        while(msSince(start) < totalMs){
+        while(msSince(start) < totalMs && !isCancelled(cancel)){
             for(const Addr& t : targets){
-                if(msSince(start) >= totalMs) break;
+                if(msSince(start) >= totalMs || isCancelled(cancel)) break;
                 Session ses;
                 std::string caps, e;
                 if(hsInitiate(s, t, me, friendPub, myCaps, ses, caps, e, 2500)){
@@ -118,11 +120,12 @@ bool handshakeWith(UdpSocket& s, const Identity& me, const uint8_t friendPub[32]
         }
     });
     bool ok = false;
-    while(!ok && msSince(start) < totalMs){
+    while(!ok && msSince(start) < totalMs && !isCancelled(cancel)){
         Session ses;
         std::string caps, e;
         int left = totalMs - (int)msSince(start);
-        if(!hsRespond(s, me, myCaps, ses, caps, e, left > 0 ? left : 0, friendPub)){ err = e; break; }
+        if(left > 2000) left = 2000;
+        if(!hsRespond(s, me, myCaps, ses, caps, e, left > 0 ? left : 0, friendPub)){ err = e; continue; }
         if(crypto_verify32(ses.peerPub, friendPub) != 0){ sessionWipe(ses); continue; }
         out = ses;
         sessionWipe(ses);
@@ -255,7 +258,7 @@ OfflineNotice::~OfflineNotice(){
 
 bool connectFriend(UdpSocket& s, const Identity& me, const uint8_t friendPub[32], const Addr& server,
                    const std::string& myCaps, bool hideIp, Session& out, std::string& peerCaps, std::string& err,
-                   const std::function<void(const std::string&)>& status){
+                   const std::function<void(const std::string&)>& status, const std::atomic<bool>* cancel){
     Presence pr(s, me, friendPub, server);
     if(!pr.ok()){ err = "could not derive the shared secret with that friend"; return false; }
     const bool initiator = std::memcmp(me.pub, friendPub, 32) < 0;
@@ -290,6 +293,7 @@ bool connectFriend(UdpSocket& s, const Identity& me, const uint8_t friendPub[32]
     bool saidOffline = false;
     status("waiting for your friend to come online (up to 2 minutes)...");
     while(msSince(start) < 120000){
+        if(isCancelled(cancel)){ err = "cancelled"; return false; }
         auto turn = Clock::now();
         pr.refresh();
         int st = pr.poll(theirCands);
@@ -308,7 +312,7 @@ bool connectFriend(UdpSocket& s, const Identity& me, const uint8_t friendPub[32]
     if(!hideIp && !friendHides){
         status(std::string("friend found; trying a direct connection (") + (initiator ? "calling" : "answering") + ")...");
         pr.put(false);
-        if(handshakeWith(s, me, friendPub, initiator, targets, true, myCaps, out, peerCaps, err, 10000)){
+        if(handshakeWith(s, me, friendPub, initiator, targets, true, myCaps, out, peerCaps, err, 10000, cancel)){
             status("direct connection established: your friend can see your public IP address");
             return true;
         }
@@ -322,6 +326,7 @@ bool connectFriend(UdpSocket& s, const Identity& me, const uint8_t friendPub[32]
     int bound = 0;
     auto relayStart = Clock::now();
     while(bound < 2 && msSince(relayStart) < 120000){
+        if(isCancelled(cancel)){ err = "cancelled"; return false; }
         s.sendTo(pkt, bn, server);
         int b = waitBind(s, server, 1000);
         if(b > bound) bound = b;
@@ -337,7 +342,8 @@ bool connectFriend(UdpSocket& s, const Identity& me, const uint8_t friendPub[32]
     if(bound == 0){ err = "the relay did not answer"; return false; }
     if(bound < 2){ err = "your friend never reached the relay"; return false; }
     std::vector<Addr> relayOnly{ server };
-    if(handshakeWith(s, me, friendPub, initiator, relayOnly, false, myCaps, out, peerCaps, err, 30000)){
+    if(isCancelled(cancel)){ err = "cancelled"; return false; }
+    if(handshakeWith(s, me, friendPub, initiator, relayOnly, false, myCaps, out, peerCaps, err, 30000, cancel)){
         status("connected through the relay: your friend cannot see your IP address; the relay sees both addresses, never the content");
         return true;
     }
