@@ -71,8 +71,8 @@ static int cmdSeed(const std::string& arg){
 }
 
 static void report(const Session& s, const std::string& myCaps, const std::string& peerCaps){
-    std::printf("Handshake complete with %s\n  peer friend code: %s\n  session id: %016llx\n  peer capabilities: %s\n  negotiated video codec: %s\n",
-        s.peer.str().c_str(), friendCode(s.peerPub).c_str(), (unsigned long long)s.id, peerCaps.c_str(), negotiate(myCaps, peerCaps).c_str());
+    std::printf("Handshake complete with %s\n  peer friend code: %s\n  session id: local %016llx / peer %016llx\n  peer capabilities: %s\n  negotiated video codec: %s\n",
+        s.peer.str().c_str(), friendCode(s.peerPub).c_str(), (unsigned long long)s.id, (unsigned long long)s.peerId, peerCaps.c_str(), negotiate(myCaps, peerCaps).c_str());
 }
 
 static int cmdListen(const std::string& portArg){
