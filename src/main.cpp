@@ -187,11 +187,12 @@ static int cmdChat(const std::string& code){
     std::string peerCaps;
     bool hideIp = configValue(CONF_FILE, "hideip") == "1";
     bool ok = connectFriend(s, id, friendPub, server, myCaps, hideIp, ses, peerCaps, err, [](const std::string& m){ consolePrint("* " + m + "\n"); });
-    identityWipe(id);
-    if(!ok){ std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    if(!ok){ announceOffline(s, id, friendPub, server); identityWipe(id); std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
     report(ses, myCaps, peerCaps);
     int rc = chatWith(s, ses);
     sessionWipe(ses);
+    announceOffline(s, id, friendPub, server);
+    identityWipe(id);
     return rc;
 }
 

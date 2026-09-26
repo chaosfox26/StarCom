@@ -1,6 +1,7 @@
 # Known issues (prototype)
 
-- Stale notes: if your friend ran `chat` in the last 10 minutes but is offline now, StarCom finds their old note. It tries to connect for about 40 seconds before giving up, and the message says how old their note was.
+- If you close the window instead of typing `/quit`, StarCom cannot post its "I'm offline" note, so for up to 45 seconds your friend may try to reach you and then fall back to waiting at the relay. Type `/quit` when you can.
+- If your friend closes and reopens StarCom while you are already waiting at the relay, you connect through the relay rather than directly.
 - Packets that arrive while StarCom is talking to the meeting point are skipped; the handshake repeats itself, so this only costs a moment.
 - The identity file is not encrypted yet (see DATA.md).
 - Command line only; there is no window yet.
