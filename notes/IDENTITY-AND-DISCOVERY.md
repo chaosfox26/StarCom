@@ -44,57 +44,30 @@ Status: design draft. No code yet.
 
 **Who learns what:** a network observer sees two IPs exchanging encrypted packets of certain sizes at certain times. They learn no keys, names or content.
 
-## 5. Finding each other: rendezvous mailboxes
-Two home computers usually cannot connect directly: both are behind routers, and their public IPs change. They need somewhere to leave "here is how to reach me" notes. That place must not become a user database.
+## 5. Finding each other: Star DNS and @names (SPEC section 3)
+- Every user chooses an @name (3 to 32 characters: a-z, 0-9, '_' and '-').
+- Friends find each other through Star DNS, a Kademlia-style network (SPEC section 3), entered through the entry points built into each copy of StarCom (SPEC section 3, "DNS Seeding").
+- What Star DNS stores for an @name is a record signed with its owner's key:
+  - the @name;
+  - the owner's public key;
+  - the owner's relay (its address and key);
+  - an expiry time of at most one hour.
+  **It holds no IP address of the user.**
+- Records are published and looked up by the user's relay on the user's behalf, so no Star DNS node ever sees a user's IP next to an @name.
+- Names are first come, first served. A record can be replaced only by a newer one from the same key.
+- The friends list remembers each friend's key the first time you add them (you can compare friend codes then), so nobody can later take over a friend's @name in your list.
 
-**Mailbox ids.** Each pair of friends shares a secret nobody else can compute: the X25519 agreement between their two identity keys. From it, each derives a **mailbox id** that changes every hour:
-
-    mailbox = BLAKE2b(shared_secret, "starcom-mbox" || hour_number)
-
-- Only the two friends can compute it. Different pairs have unrelated ids, and one hour's id is unlinkable to the next hour's.
-- **Clock skew:** a client puts to the current hour's mailbox, and gets from the previous, current and next hour's mailboxes. Clocks that are up to an hour apart still meet.
-
-**Contact note.** When Alice comes online, she writes a note to each friend's current mailbox:
-- the note holds her connection candidates (local address, public address seen by the rendezvous, a relay address if any) and a timestamp;
-- it is sealed with an AEAD cipher (ChaCha20-Poly1305), using a key derived from the shared secret, so it is both secret and authenticated: nobody else can forge or change a note;
-- it carries a counter and a timestamp; a note older than the newest one already seen, or more than 15 minutes old, is ignored, so a replayed old note cannot redirect a friend to a stale address;
-- the rendezvous sees only the mailbox id and random-looking bytes.
-
-**The rendezvous server** is a small, open-source, stateless program anyone can run.
-- **RAM only:** notes expire after at most 10 minutes. There is no disk, no database and no logs.
-- It answers two requests: put(mailbox, blob) and get(mailbox).
-- It also tells a client which public IP and port it sees (the STUN function) so clients can learn their own public address.
-- **The prototype ships with no built-in servers.** The server list is supplied by the user: a local config file that is never part of the repo, or an "add a server" screen. Testers receive a server address privately. No server address is ever written into the source, the binaries or these notes.
-- A client uses 2 or 3 servers at once, so one being down does not matter.
-
-**Who learns what: the honest part.**
-- The rendezvous **cannot read** notes, and **does not know** which keys or names are behind a mailbox.
-- It **does see the IP address** of every client that talks to it. That cannot be avoided when talking over the internet.
-- If one rendezvous sees IP A put to mailbox M and IP B get from M, it can infer that **A and B are probably friends**, until the id rotates.
-  - Hourly rotation stops it building a long-term friend graph under one label, but it could still link IPs hour by hour.
-  - A server that promises "no logs" could still be modified to log. Running your own, or spreading requests across servers, reduces this exposure; it does not remove it.
-- **Mitigation, later:** clients can pad and batch, and poll a few decoy mailboxes, so a single put/get pair is less telling. A user who wants to hide even this can route rendezvous traffic through Tor (a setting, off by default, documented).
-- **Rejected alternative, a public DHT** (as BitTorrent uses): there is no operator to trust, but every lookup reveals your IP to random strangers, and the friend graph leaks to whoever runs many nodes. That is more exposure than a few known servers, not less.
-
-## 6. Connecting: hole punching, then relay
-**Direct first (UDP hole punching).**
-1. Both sides read each other's candidates from the mailbox notes.
-2. Both send packets to each other's candidates at the same time. Most home routers then let the traffic through.
-3. The first candidate that completes the Noise handshake wins.
-- This works for most home connections. It fails when both sides are behind strict ("symmetric") NAT, which is common on mobile carriers and some ISPs.
-
-**Relay fallback.**
-- If a direct connection does not work within about 5 seconds, both sides connect to a **relay** and it forwards the already-encrypted Noise packets.
-- A relay is the same kind of small open-source program as the rendezvous, and it can be the same process.
-- It stores nothing. It sees traffic volume and timing, never content.
-
-**Who learns what:**
-- **Direct connection: your friend learns your public IP address.** This is the biggest privacy difference from services that route everything through their own servers, and it is stated plainly in the app and in NETWORK.md. From an IP you can usually tell someone's rough city and ISP.
-- **Relay connection:** your friend sees only the relay's IP. The relay sees both IPs, when you talk and how much.
-- **Setting "Hide my IP from friends":** always use a relay and never connect directly. The cost is a little more latency, and the relay operator learns both IPs.
-- **Setting "Never use relays":** direct only. Some pairs of friends will then be unable to connect, and the app says so.
-
-**If the app is built on a browser engine (WebRTC).** The browser's own connection machinery (ICE for hole punching and TURN relays, DTLS-SRTP for encrypted media) replaces the hand-rolled hole punching and the Noise transport for media above. Noise IK still authenticates the two friends through the mailbox notes. The WebRTC connection offers (SDP), **including the DTLS certificate fingerprints**, travel only inside those authenticated notes, and each side refuses a connection whose fingerprint does not match. Otherwise a relay or rendezvous could swap the offers and read the media. The who-learns-what list above stays the same: a TURN relay learns what a relay learns.
+## 6. Connecting: always through relays (the owner's order; it overrides SPEC section 5's "Direct Path")
+- No two users ever connect directly, and no user ever receives another user's IP address, in any form, even encrypted.
+- Each user keeps one encrypted link (Noise IK, proven with their identity key) to a relay.
+- A conversation is a circuit: your relay, then your friend's relay (when it is a different one), then your friend.
+- The two people then run their own end-to-end Noise IK session inside the circuit, so the relays pass along packets they cannot read.
+- **Who learns what:**
+  - your friend: never your IP;
+  - your relay: your IP (it must, to send packets back), the key you talk to, when and how much; never the content;
+  - your friend's relay: your relay's address, never yours.
+  - One relay today: see KNOWN-ISSUES.
+- A relay stores nothing about users on disk and writes no logs.
 
 ## 7. Being offline
 - No server stores messages, so a message reaches a friend only while both devices are online, **or** if someone both trust holds it.
@@ -112,9 +85,8 @@ Two home computers usually cannot connect directly: both are behind routers, and
 | Ed25519 identity, passphrase-encrypted key file | yes | multi-device certificates |
 | Friend code + QR + safety number | yes | PAKE short pairing codes |
 | Noise IK / XX handshake | yes | per-message ratchet for offline delivery |
-| Hourly mailbox ids on 2-3 rendezvous servers | yes | decoys, padding, Tor option |
-| UDP hole punching | yes | TCP fallback for UDP-blocked networks |
-| Relay fallback + "Hide my IP" setting | yes | community relay list |
+| Star DNS @names, published through your relay | yes | many volunteer relays |
+| Masked path through relays (no direct connections) | yes | two different relays per conversation by default |
 | Offline delivery | sender outbox only | group store-and-forward |
 | LAN discovery | no | opt-in |
 

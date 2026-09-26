@@ -17,9 +17,9 @@ done
 rm -f build/libopus.a
 ar rcs build/libopus.a $OBJS
 set --
-if [ -f .private/rendezvous.txt ]; then
-    RV=$(head -n 1 .private/rendezvous.txt | tr -d '\r\n ')
-    if [ -n "$RV" ]; then set -- "-DSTARCOM_DEFAULT_RENDEZVOUS=\"$RV\""; fi
+if [ -f .private/seeds.txt ]; then
+    SEEDS=$(tr -d '\r ' < .private/seeds.txt | grep -v '^$' | paste -sd, -)
+    if [ -n "$SEEDS" ]; then set -- "$@" "-DSTARCOM_SEEDS=\"$SEEDS\""; fi
 fi
 "$CXX" -std=c++17 -O2 -Wall -Wextra "$@" -I$OPUS/include -o build/starcom src/*.cpp build/monocypher.o build/monocypher-ed25519.o build/libopus.a -ldl -lm -lpthread
 echo "BUILD OK: build/starcom"

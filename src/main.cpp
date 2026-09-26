@@ -1,48 +1,53 @@
-#include "call.h"
 #include "chat.h"
+#include "dht.h"
 #include "console.h"
-#include "exitguard.h"
 #ifdef _WIN32
 #include "gui/gui.h"
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
 #endif
-#include "handshake.h"
 #include "hwprobe.h"
+#include "engine.h"
 #include "identity.h"
-#include "p2p.h"
+#include "link.h"
 #include "paths.h"
 #include "textsafe.h"
+#include "voicecall.h"
 #include "rendezvous.h"
 #include "platform_net.h"
 #include "seed.h"
+#include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
+#include <fstream>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace sc;
 
 static const char* ID_FILE = "identity.key";
-static const char* CONF_FILE = "starcom.conf";
+static const char* NAME_FILE = "name.txt";
+static const char* FRIENDS_FILE = "friends.txt";
 static std::string g_dataWhere;
 
 static int usage(){
     std::printf(
         "StarCom\n"
-        "  starcom                             open the StarCom window (Windows)\n"
-        "  starcom id                          create or show your identity and friend code\n"
-        "  starcom probe                       show hardware video encoders and the capability JSON\n"
-        "  starcom seed [name]                 look up the seed name (default: seed= in starcom.conf)\n"
-        "  starcom listen <port>               wait for one peer and complete a handshake\n"
-        "  starcom chat <friend code>          find a friend through the meeting point and chat\n"
-        "  starcom call <friend code>          the same, then an encrypted voice call (Windows; use headphones)\n"
-        "                                      (needs rendezvous=<host>:<port> in starcom.conf)\n"
-        "  starcom rendezvous <port>           run a meeting point + relay (keeps nothing on disk, no logs)\n"
-        "  starcom connect <host|seed> <port> <friend code>\n"
-        "                                      handshake with a listening peer\n");
+        "  starcom                    open the StarCom window (Windows)\n"
+        "  starcom name <name>        choose your @name (friends find you by it)\n"
+        "  starcom chat @name         chat with a friend; neither of you can see the other's IP address\n"
+        "  starcom call @name         the same, and ring your friend straight away (Windows; use headphones)\n"
+        "  starcom id                 show your friend code\n"
+        "  starcom probe              show your hardware video encoders\n"
+        "  starcom seed               look up this copy's network entry points\n"
+        "  starcom relay <port>       run a StarCom relay + entry point (keeps nothing about users, no logs)\n");
     return 2;
 }
 
@@ -79,133 +84,232 @@ static int cmdProbe(){
     return 0;
 }
 
-static int cmdSeed(const std::string& arg){
-    std::string name = arg.empty() ? configValue(CONF_FILE, "seed") : arg;
+static int cmdSeed(){
     std::vector<Addr> addrs;
     std::string err;
-    if(!seedLookup(name, 0, addrs, err)){ std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
-    std::printf("Seed %s resolves to %zu entry point(s):\n", name.c_str(), addrs.size());
-    for(const Addr& a : addrs){
-        std::string s = a.str();
-        std::printf("  %s\n", s.substr(0, s.rfind(':')).c_str());
-    }
+    if(!seedNodes(addrs, err) || addrs.empty()){ std::fprintf(stderr, "%s\n", err.empty() ? "this copy of StarCom has no network entry points" : err.c_str()); return 1; }
+    std::printf("%zu network entry point(s) found for this copy of StarCom.\n", addrs.size());
     return 0;
 }
 
-
-static int chatWith(UdpSocket& s, Session& ses){
-    std::string tag = friendCode(ses.peerPub).substr(0, 9);
-    consolePrint("\nChat open with " + tag + ". Type a message and press Enter. /quit to leave.\n");
-    LineInput input;
-    input.start();
+static int chatWithCall(UdpSocket& s, Session& ses, const std::string& tag, bool lower, bool startCall, bool autoAccept, LineInput& input){
+    Engine e(s, ses);
+    VoiceCall vc(e, lower);
+    std::atomic<int> shown((int)CallState::Idle);
+    vc.setOnChange([&vc, &shown, autoAccept](){
+        CallState st = vc.state();
+        if((int)st == shown.load()) return;
+        shown = (int)st;
+        if(st == CallState::Ringing){
+            if(autoAccept) vc.accept();
+            else consolePrint("* incoming call: type /accept to answer or /hangup to decline (use headphones)\n");
+        }
+        else if(st == CallState::Calling) consolePrint("* calling... (/hangup to cancel)\n");
+        else if(st == CallState::InCall) consolePrint("* in call: /mute, /deafen, /hangup (use headphones: there is no echo cancellation yet)\n");
+        else if(st == CallState::Ended) consolePrint("* " + vc.note() + "\n");
+    });
+    consolePrint("\nChat open with " + tag + ". Type a message and press Enter. /call to start a voice call, /quit to leave.\n");
+    if(startCall) vc.call();
     ChatIO io;
-    io.nextOutgoing = [&input](std::string& line){
-        if(input.next(line)) return true;
-        if(input.closed()){ line = "/quit"; return true; }
-        return false;
+    io.nextOutgoing = [&input, &vc](std::string& line){
+        for(;;){
+            if(!input.next(line)){
+                if(input.closed()){ line = "/quit"; return true; }
+                return false;
+            }
+            if(line == "/call"){ vc.call(); continue; }
+            if(line == "/accept"){ vc.accept(); continue; }
+            if(line == "/hangup"){ vc.hangup(); continue; }
+            if(line == "/mute"){ vc.setMuted(!vc.muted()); consolePrint(vc.muted() ? "* muted\n" : "* unmuted\n"); continue; }
+            if(line == "/deafen"){ vc.setDeafened(!vc.deafened()); consolePrint(vc.deafened() ? "* deafened\n" : "* undeafened\n"); continue; }
+            return true;
+        }
     };
     io.onIncoming = [&tag](const std::string& text){ consolePrint("[" + tag + "] " + safeText(text) + "\n"); };
     io.onStatus = [](const std::string& m){ consolePrint("* " + m + "\n"); };
     std::string err;
-    bool ok = runChat(s, ses, io, err);
+    bool ok = runChatWith(e, io, err);
     if(!ok) consolePrint("* chat ended: " + err + "\n");
     return ok ? 0 : 1;
 }
 
-static void report(const Session& s, const std::string& myCaps, const std::string& peerCaps){
-    std::printf("Handshake complete with %s\n  peer friend code: %s\n  session id: local %016llx / peer %016llx\n  peer capabilities: %s\n  negotiated video codec: %s\n",
-        s.peer.str().c_str(), friendCode(s.peerPub).c_str(), (unsigned long long)s.id, (unsigned long long)s.peerId, peerCaps.c_str(), negotiate(myCaps, peerCaps).c_str());
+static std::string readName(){
+    std::ifstream f(NAME_FILE);
+    std::string line, n;
+    if(std::getline(f, line) && normalizeName(line, n)) return n;
+    return std::string();
 }
 
-static int cmdListen(const std::string& portArg){
-    int port = std::atoi(portArg.c_str());
-    if(port <= 0 || port > 65535) return usage();
+static int cmdName(const std::string& arg){
+    std::string n;
+    if(!normalizeName(arg, n)){ std::fprintf(stderr, "an @name is 3 to 32 characters: letters a-z, digits, '_' and '-'\n"); return 1; }
+    std::ofstream f(NAME_FILE, std::ios::trunc);
+    f << n << '\n';
+    if(!f){ std::fprintf(stderr, "could not save %s\n", NAME_FILE); return 1; }
+    std::printf("Your @name is now @%s. Friends find you by it while StarCom is running.\n", n.c_str());
+    return 0;
+}
+
+static bool findPin(const std::string& name, uint8_t pub[32]){
+    std::ifstream f(FRIENDS_FILE);
+    std::string line;
+    while(std::getline(f, line)){
+        while(!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        size_t a = line.find(' ');
+        if(a == std::string::npos) continue;
+        size_t b = line.rfind(' ');
+        if(b == a) continue;
+        if(line.substr(b + 1) == name && parseFriendCode(line.substr(0, a), pub)) return true;
+    }
+    return false;
+}
+
+static void savePin(const std::string& code, const std::string& name){
+    std::ofstream f(FRIENDS_FILE, std::ios::app);
+    f << code << ' ' << name << ' ' << name << '\n';
+}
+
+static int cmdChatName(const std::string& arg, bool voice){
+    std::string fname;
+    if(!normalizeName(arg, fname)){ std::fprintf(stderr, "that is not a valid @name\n"); return 1; }
+    std::string mine = readName();
+    if(mine.empty()){ std::fprintf(stderr, "choose your own @name first: starcom name <name> (your friends find you by it)\n"); return 1; }
+    if(mine == fname){ std::fprintf(stderr, "that is your own @name\n"); return 1; }
     Identity id;
     if(!loadId(id)) return 1;
-    std::string myCaps = capsJson(probeHardware()), err;
-    UdpSocket s;
-    if(!s.open(familyV6(), (uint16_t)port, err) && !s.open(familyV4(), (uint16_t)port, err)){ std::fprintf(stderr, "%s\n", err.c_str()); identityWipe(id); return 1; }
-    std::printf("Listening on UDP port %u as %s\n", (unsigned)s.localPort(), friendCode(id.pub).c_str());
-    Session ses;
-    std::string peerCaps;
-    bool ok = hsRespond(s, id, myCaps, ses, peerCaps, err, 120000);
-    identityWipe(id);
-    if(!ok){ std::fprintf(stderr, "handshake failed: %s\n", err.c_str()); return 1; }
-    report(ses, myCaps, peerCaps);
-    int rc = chatWith(s, ses);
-    sessionWipe(ses);
-    return rc;
-}
-
-static int cmdConnect(const std::string& host, const std::string& portArg, const std::string& code){
-    int port = std::atoi(portArg.c_str());
-    uint8_t peerPub[32];
-    if(port <= 0 || port > 65535) return usage();
-    if(!parseFriendCode(code, peerPub)){ std::fprintf(stderr, "that is not a valid friend code\n"); return 1; }
-    std::string name = host == "seed" ? configValue(CONF_FILE, "seed") : host;
-    std::vector<Addr> addrs;
+    std::string myCaps = capsJson(probeHardware(), mine);
+    std::mutex im;
+    std::deque<uint64_t> incoming;
+    RelayLink link;
+    link.setIncoming([&im, &incoming](uint64_t c){ std::lock_guard<std::mutex> g(im); if(incoming.size() < 16) incoming.push_back(c); });
+    link.start(id, mine);
+    std::printf("You are @%s (%s)\n", mine.c_str(), friendCode(id.pub).c_str());
     std::string err;
-    if(!seedLookup(name, (uint16_t)port, addrs, err)){ std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
-    Identity id;
-    if(!loadId(id)) return 1;
-    std::string myCaps = capsJson(probeHardware());
-    for(const Addr& a : addrs){
-        UdpSocket s;
-        if(!s.open(a.family(), 0, err)) continue;
-        std::printf("Handshaking with %s ...\n", a.str().c_str());
-        Session ses;
-        std::string peerCaps;
-        if(hsInitiate(s, a, id, peerPub, myCaps, ses, peerCaps, err, 10000)){
-            identityWipe(id);
-            report(ses, myCaps, peerCaps);
-            int rc = chatWith(s, ses);
-            sessionWipe(ses);
-            return rc;
+    uint8_t pin[32];
+    if(!findPin(fname, pin)){
+        consolePrint("* connecting to the StarCom network...\n");
+        if(!link.waitReady(30000, nullptr)){ identityWipe(id); std::fprintf(stderr, "%s\n", link.note().c_str()); return 1; }
+        PointerRecord rec;
+        bool got = false, said = false;
+        for(int i = 0; i < 60 && !got; i++){
+            got = link.lookup(fname, nullptr, rec, err);
+            if(got) break;
+            if(!said){ consolePrint("* @" + fname + " is not on the StarCom network yet; still looking (up to 2 minutes)...\n"); said = true; }
+            std::this_thread::sleep_for(std::chrono::seconds(2));
         }
-        std::fprintf(stderr, "  failed: %s\n", err.c_str());
+        if(!got){ identityWipe(id); std::fprintf(stderr, "@%s was not found on the StarCom network\n", fname.c_str()); return 1; }
+        std::memcpy(pin, rec.owner, 32);
+        std::string code = friendCode(pin);
+        std::printf("@%s has the friend code\n  %s\nCheck it with your friend (in person, by phone, ...). It is now saved in your friends list.\n", fname.c_str(), code.c_str());
+        savePin(code, fname);
+    }
+    if(std::memcmp(pin, id.pub, 32) == 0){ identityWipe(id); std::fprintf(stderr, "that @name belongs to you\n"); return 1; }
+    const bool lower = std::memcmp(id.pub, pin, 32) < 0;
+    std::atomic<bool> running(true), adopted(false);
+    std::mutex pm;
+    std::unique_ptr<UdpSocket> ch(new UdpSocket());
+    std::unique_ptr<UdpSocket> pendCh;
+    Session ses, pendSes;
+    std::string peerCaps, pendCaps;
+    bool havePend = false;
+    UdpSocket* current = nullptr;
+    std::thread watcher([&]{
+        while(running){
+            uint64_t c = 0;
+            {
+                std::lock_guard<std::mutex> g(im);
+                if(!incoming.empty()){ c = incoming.front(); incoming.pop_front(); }
+            }
+            if(!c){ std::this_thread::sleep_for(std::chrono::milliseconds(50)); continue; }
+            std::unique_ptr<UdpSocket> sx(new UdpSocket());
+            Session s;
+            std::string pc, e;
+            if(!answerMasked(link, c, *sx, id, myCaps, s, pc, e)) continue;
+            if(lower || std::memcmp(s.peerPub, pin, 32) != 0){ sessionWipe(s); link.close(*sx); continue; }
+            {
+                std::lock_guard<std::mutex> g(pm);
+                if(havePend){ link.close(*pendCh); sessionWipe(pendSes); }
+                pendCh = std::move(sx);
+                pendSes = s;
+                pendCaps = pc;
+                havePend = true;
+                if(current) link.wake(*current);
+            }
+            sessionWipe(s);
+            adopted = true;
+        }
+    });
+    if(!lower) for(int i = 0; i < 50 && !adopted; i++) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    bool ok = false;
+    if(!adopted) ok = connectMasked(link, *ch, id, fname, pin, myCaps, ses, peerCaps, err, [](const std::string& m){ consolePrint("* " + m + "\n"); }, &adopted);
+    int rc = 1;
+    bool first = true;
+    LineInput input;
+    input.start();
+    for(;;){
+        {
+            std::lock_guard<std::mutex> g(pm);
+            if(havePend){
+                if(ok) sessionWipe(ses);
+                link.close(*ch);
+                ch = std::move(pendCh);
+                ses = pendSes;
+                sessionWipe(pendSes);
+                peerCaps = pendCaps;
+                havePend = false;
+                ok = true;
+            }
+            current = ok ? ch.get() : nullptr;
+        }
+        if(!ok) break;
+        if(first) std::printf("Connected to @%s through the relays (neither of you can see the other's IP address)\n  friend code: %s\n  negotiated video codec: %s\n", fname.c_str(), friendCode(ses.peerPub).c_str(), negotiate(myCaps, peerCaps).c_str());
+        else consolePrint("* switched to @" + fname + "'s connection (you both connected at once)\n");
+        bool startCall = voice && first;
+        first = false;
+        rc = chatWithCall(*ch, ses, "@" + fname, lower, startCall, voice, input);
+        {
+            std::lock_guard<std::mutex> g(pm);
+            current = nullptr;
+        }
+        sessionWipe(ses);
+        link.close(*ch);
+        bool pend;
+        {
+            std::lock_guard<std::mutex> g(pm);
+            pend = havePend;
+        }
+        if(rc == 0) break;
+        for(int i = 0; i < 100 && !pend && !lower; i++){
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            std::lock_guard<std::mutex> g(pm);
+            pend = havePend;
+        }
+        ok = false;
+        ch.reset(new UdpSocket());
+        if(!pend){
+            consolePrint("* the conversation was closed; trying to reach @" + fname + " again (up to 2 minutes)...\n");
+            adopted = false;
+            ok = connectMasked(link, *ch, id, fname, pin, myCaps, ses, peerCaps, err, [](const std::string& m){ consolePrint("* " + m + "\n"); }, &adopted);
+            std::lock_guard<std::mutex> g(pm);
+            if(!ok && !havePend) break;
+        }
+    }
+    running = false;
+    watcher.join();
+    {
+        std::lock_guard<std::mutex> g(pm);
+        if(havePend){ link.close(*pendCh); sessionWipe(pendSes); }
     }
     identityWipe(id);
-    return 1;
-}
-
-static int cmdChat(const std::string& code, bool voice){
-    uint8_t friendPub[32];
-    if(!parseFriendCode(code, friendPub)){ std::fprintf(stderr, "that is not a valid friend code\n"); return 1; }
-    std::string rv = meetingPoint(CONF_FILE);
-    size_t colon = rv.rfind(':');
-    if(rv.empty() || colon == std::string::npos){ std::fprintf(stderr, "no meeting point: this build has none built in; put rendezvous=<host>:<port> in %s inside the StarCom data folder\n", CONF_FILE); return 1; }
-    int port = std::atoi(rv.substr(colon + 1).c_str());
-    std::vector<Addr> addrs;
-    std::string err;
-    if(port <= 0 || port > 65535 || !resolve(rv.substr(0, colon), (uint16_t)port, addrs, err)){ std::fprintf(stderr, "cannot resolve the meeting point: %s\n", err.c_str()); return 1; }
-    Addr server = addrs[0];
-    for(const Addr& a : addrs) if(a.family() == familyV4()){ server = a; break; }
-    Identity id;
-    if(!loadId(id)) return 1;
-    if(std::memcmp(id.pub, friendPub, 32) == 0){ identityWipe(id); std::fprintf(stderr, "that is your own friend code\n"); return 1; }
-    std::string myCaps = capsJson(probeHardware());
-    UdpSocket s;
-    if(!s.open(server.family(), 0, err)){ identityWipe(id); std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
-    std::printf("You are %s\n", friendCode(id.pub).c_str());
-    static OfflineNotice notice;
-    if(!notice.arm(s, id, friendPub, server)){ identityWipe(id); std::fprintf(stderr, "could not derive the shared secret with that friend\n"); return 1; }
-    installExitHook([]{ notice.send(); });
-    Session ses;
-    std::string peerCaps;
-    bool hideIp = configValue(CONF_FILE, "hideip") == "1";
-    bool ok = connectFriend(s, id, friendPub, server, myCaps, hideIp, ses, peerCaps, err, [](const std::string& m){ consolePrint("* " + m + "\n"); });
-    identityWipe(id);
-    if(!ok){ notice.send(); std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
-    report(ses, myCaps, peerCaps);
-    int rc = voice ? runCall(s, ses, friendCode(ses.peerPub).substr(0, 9)) : chatWith(s, ses);
-    sessionWipe(ses);
-    notice.send();
+    link.setIncoming(nullptr);
+    if(!ok && first){ std::fprintf(stderr, "%s\n", err.c_str()); link.stop(); return 1; }
+    link.stop();
     return rc;
 }
 
 int main(int argc, char** argv){
     std::string dataErr;
-    bool isServer = argc > 1 && std::string(argv[1]) == "rendezvous";
+    bool isServer = argc > 1 && std::string(argv[1]) == "relay";
     bool dataOk = isServer ? true : enterDataDir(g_dataWhere, dataErr);
 #ifdef _WIN32
     if(argc < 2 || std::string(argv[1]) == "gui"){
@@ -227,12 +331,11 @@ int main(int argc, char** argv){
     int rc;
     if(cmd == "id") rc = cmdId();
     else if(cmd == "probe") rc = cmdProbe();
-    else if(cmd == "seed") rc = cmdSeed(argc > 2 ? argv[2] : "");
-    else if(cmd == "listen" && argc > 2) rc = cmdListen(argv[2]);
-    else if(cmd == "connect" && argc > 4) rc = cmdConnect(argv[2], argv[3], argv[4]);
-    else if(cmd == "chat" && argc > 2) rc = cmdChat(argv[2], false);
-    else if(cmd == "call" && argc > 2) rc = cmdChat(argv[2], true);
-    else if(cmd == "rendezvous" && argc > 2) rc = runRendezvous((uint16_t)std::atoi(argv[2]));
+    else if(cmd == "seed") rc = cmdSeed();
+    else if(cmd == "name" && argc > 2) rc = cmdName(argv[2]);
+    else if(cmd == "chat" && argc > 2) rc = cmdChatName(argv[2], false);
+    else if(cmd == "call" && argc > 2) rc = cmdChatName(argv[2], true);
+    else if(cmd == "relay" && argc > 2) rc = runRelay((uint16_t)std::atoi(argv[2]));
     else rc = usage();
     netShutdown();
     return rc;

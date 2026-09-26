@@ -22,6 +22,7 @@ struct EngineStats {
     int voiceTargetKbps = 0;
     int voiceFrameMs = 20;
     const char* state = "clear";
+    int lastRecvAgeMs = 0;
 };
 
 class Engine {

@@ -55,35 +55,34 @@ static bool readConsoleLine(std::string& out){
 }
 #endif
 
-LineInput::LineInput() : eof_(false) {}
+LineInput::LineInput() : st_(std::make_shared<State>()) {}
 
 LineInput::~LineInput(){
     if(t_.joinable()) t_.detach();
 }
 
 void LineInput::start(){
-    t_ = std::thread([this]{ run(); });
-}
-
-void LineInput::run(){
-    std::string line;
-    while(readConsoleLine(line)){
-        std::lock_guard<std::mutex> lk(mu_);
-        q_.push_back(line);
-    }
-    eof_ = true;
+    std::shared_ptr<State> st = st_;
+    t_ = std::thread([st]{
+        std::string line;
+        while(readConsoleLine(line)){
+            std::lock_guard<std::mutex> lk(st->mu);
+            st->q.push_back(line);
+        }
+        st->eof = true;
+    });
 }
 
 bool LineInput::next(std::string& line){
-    std::lock_guard<std::mutex> lk(mu_);
-    if(q_.empty()) return false;
-    line = q_.front();
-    q_.pop_front();
+    std::lock_guard<std::mutex> lk(st_->mu);
+    if(st_->q.empty()) return false;
+    line = st_->q.front();
+    st_->q.pop_front();
     return true;
 }
 
 bool LineInput::closed() const {
-    return eof_;
+    return st_->eof;
 }
 
 }

@@ -2,23 +2,23 @@
 
 Every network connection StarCom makes is listed here: to whom, when, why, and what is sent. If a connection is not on this page, StarCom does not make it.
 
+**The rule behind all of it:** no StarCom user ever receives another user's IP address. Every conversation, including a two-person chat, goes through relays. What travels between people is encrypted end to end, and the relays cannot read it.
+
 | Connection | To whom | When | Why | What is sent |
 |---|---|---|---|---|
-| DNS lookup of the seed name | Your own DNS resolver (usually your internet provider or router) | When you run `seed` or `connect seed` | To find a network entry point | The seed name. Your resolver learns that you looked it up. |
-| UDP handshake | The peer address you give (or that the seed returned) | When you run `connect`, or when a peer connects to your `listen` port | To set up an encrypted session | Encrypted handshake packets: your public key and codec capability list, readable only by that peer |
+| DNS lookup of the entry points (only if the entry points built into this copy are names, not numbers) | Your own DNS resolver (usually your internet provider or router) | When StarCom starts | To find the network's entry points (SPEC section 3, "DNS Seeding") | The entry-point names built into this copy of StarCom. Your resolver learns that you looked them up. |
+| Relay key request | Your relay (an entry point) | Once, when StarCom first links to it | To learn the relay's public key, so the link to it can be encrypted | A 64-byte request holding nothing but "which key are you?". The relay answers with its public key. |
+| Your link to your relay | Your relay | The whole time StarCom is open. A tiny "still here" packet every 25 seconds keeps your router's connection open. | Everything you do goes through this one encrypted link | An encrypted session (Noise IK, ChaCha20-Poly1305) proven with your identity key. Inside it: your signed @name record, @name lookups, and the encrypted packets of your conversations. |
+| Your @name record | Star DNS (the StarCom network), through your relay | When StarCom starts, every 30 minutes, and when your relay changes | So friends can find you by your @name | A record signed with your key: your @name, your public key, your relay's address and key, and an expiry time. **It holds no IP address of yours.** The relay stores it in Star DNS on your behalf, so no Star DNS node ever sees your IP next to your @name. |
+| @name lookups | Star DNS, through your relay | When you add a friend, or open a chat with one | To find which relay can reach your friend | The @name you are looking for (inside your encrypted link). Your relay searches Star DNS for you. You check the answer's signature yourself. |
+| Conversations (chat and voice) | Your friend, through your relay and your friend's relay | While a chat or call is open | To carry messages and voice | Packets encrypted end to end between you and your friend (Noise IK, ChaCha20-Poly1305). Each relay passes them on without being able to read them. |
 
-What the other side learns: a peer you handshake with sees your public IP address. Anyone watching the network sees two IPs exchanging encrypted packets, but not what is inside.
-
-| Chat | The peer you completed the handshake with | While the chat is open | To carry your messages | Encrypted packets: your messages, acknowledgements, and a small keepalive about every 25 seconds so home routers keep the connection open. If the peer is silent for 75 seconds the chat ends. |
-
-| Voice call | The friend you connected to (directly or through the relay) | While a call is open | To carry your voice | About 50 encrypted packets a second while you talk (roughly 30 kbps of voice plus packet overhead, about 55 kbps in total), far fewer during silence, plus a small check-in every 5 seconds. Through a relay, the relay can see packet sizes and timing, which rise and fall with speech, but never the content. |
-| Meeting point (rendezvous) | The meeting-point server named in your starcom.conf (StarCom ships with none built in) | When you run `chat` with a friend code: about one small request per second while waiting, your note refreshed every 10 seconds, and an "offline" note when you leave | To learn your own public address and to leave and collect "how to reach me" notes for one friend | A lookup request, and a note encrypted so only that friend can read it. The note holds your public and local network addresses and a timestamp. The server stores notes in memory only, for at most 10 minutes, and keeps no logs. |
-| Direct connection to a friend | Your friend's addresses from their note | Right after both notes are found | To connect without any server in between | First a few small "hole punching" packets, then the encrypted handshake and chat |
-| Relay (only if a direct connection fails) | The same server as the meeting point | If a direct connection has not worked within about 10 seconds | Some home routers block direct connections | Your already-encrypted handshake and chat packets, which the relay forwards unread |
-
-**Who learns what, plainly:**
-- **The meeting-point server sees your IP address.** If it sees you and a friend use related mailboxes in the same hour, it could guess the two of you are talking. It cannot read notes, keys, names or messages. Mailbox names change every hour.
-- **A direct connection means your friend sees your public IP address.** From an IP you can usually tell a rough city and internet provider.
-- **Through the relay, your friend does not see your IP.** The relay sees both IP addresses, when you talk and how much, but never what you say.
+## Who learns what, plainly
+- **Your friend never learns your IP address,** and you never learn theirs. Each of you sees only your own relay. Your friend learns your @name and your friend code (your public key), as they must in order to know it is you.
+- **Your relay** necessarily sees your IP address: it has to know where to send your packets back. It also sees which key your conversations go to, when, and how much. It never sees the content. It keeps this only in memory while your link lasts, writes no logs, and never passes your address on to anyone.
+- **Your friend's relay** sees your relay's address, never yours.
+- **When you and your friend use the same relay** (today, while the network has one relay), that one relay sees both of your addresses. Planned: as more relays join, StarCom will prefer a relay different from your friend's, so that no single relay sees both ends.
+- **Star DNS nodes** see the address of the relay that stores or looks up a record, never yours.
+- **Anyone watching your internet connection** sees encrypted packets going to your relay, and nothing else.
 
 StarCom makes no other connections: no update checks, no telemetry, no analytics.

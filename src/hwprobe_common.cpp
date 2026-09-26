@@ -18,6 +18,24 @@ static std::string codecJson(const char* name, const CodecCaps& c){
     return s + "]}";
 }
 
+std::string capsJson(const HwCaps& c, const std::string& name){
+    std::string j = capsJson(c);
+    if(name.empty()) return j;
+    return "{\"name\":\"" + jsonEsc(name) + "\"," + j.substr(1);
+}
+
+std::string capsName(const std::string& caps){
+    const std::string key = "\"name\":\"";
+    size_t i = caps.find(key);
+    if(i == std::string::npos) return std::string();
+    i += key.size();
+    size_t j = caps.find('"', i);
+    if(j == std::string::npos || j - i > 32) return std::string();
+    std::string n = caps.substr(i, j - i);
+    for(char ch : n) if(!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-')) return std::string();
+    return n.size() >= 3 ? n : std::string();
+}
+
 std::string capsJson(const HwCaps& c){
     return "{\"v\":1,\"api\":\"" + jsonEsc(c.api) + "\"," + codecJson("av1", c.av1) + "," + codecJson("hevc", c.hevc) + "," + codecJson("h264", c.h264) + "}";
 }

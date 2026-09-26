@@ -1,73 +1,53 @@
 # Testing StarCom (early prototype)
 
-StarCom is built with AI, openly (see README.md). This is a very early prototype for testing text chat between two friends. On Windows, double-click `starcom.exe` to open the StarCom window. The command-line commands below also work, on Windows and Linux.
+StarCom is built with AI, openly (see README.md). This early prototype does direct messages and voice calls between friends. **Nobody in a conversation can see anybody's IP address:** everything goes through relays, encrypted end to end.
 
 ## What you get
-- `starcom.exe`: the whole program in one file (Windows, under 1 MB, nothing to install). The copy you get from whoever invited you already knows which meeting point to use.
-- StarCom keeps its own files (your identity, your friends list) in its data folder: `%LOCALAPPDATA%\StarCom` on Windows, `~/.local/share/starcom` on Linux. Nothing is written next to the program.
+- `starcom.exe` (Windows) or `starcom` (Linux): the whole program in one file, nothing to install. The copy you get from whoever invited you already knows how to join the StarCom network.
+- StarCom keeps its own files in its data folder: `%LOCALAPPDATA%\StarCom` on Windows, `~/.local/share/starcom` on Linux. Nothing is written next to the program.
+  - Your identity (`identity.key`).
+  - Your @name (`name.txt`).
+  - Your friends list (`friends.txt`).
 
 ## The window (Windows)
 1. Double-click `starcom.exe`.
-2. Your friend code is on the welcome screen: click Copy and send it to your friend.
-3. Click the + next to Direct Messages, paste your friend's code, give them a nickname, and click Add.
-4. Click their name. StarCom finds them through the meeting point (they need to have StarCom open too) and the status at the top shows when you are connected.
-5. Type in the box at the bottom and press Enter.
+2. Choose your @name and click Save. Tell your friends your @name.
+3. Click the + next to Direct Messages, type your friend's @name and click Find.
+   - StarCom shows their friend code. If you want to be sure it is really them, compare it with them.
+   - Click Add.
+4. Click your friend's name and start typing. They get your messages whenever they have StarCom open. You do not both need to open the chat first.
+5. To call, click the phone at the top of the chat. Your friend clicks Accept. Use headphones: there is no echo cancellation yet.
+   - The call panel has Mute, Deafen and Disconnect.
+6. The gear at the bottom left opens Settings: your @name, your friend code, and where StarCom keeps its files.
 
-The right-hand panel shows your connection type and who can see your IP address.
+## Command line (Windows and Linux)
+- Choose your @name once:
 
-## Command line
-## 1. Get your friend code
-Open a Command Prompt in that folder and run:
+      starcom name river
 
-    starcom id
+- Chat with a friend by their @name:
 
-The first time, this creates `identity.key` in the StarCom data folder: that file IS your identity.
-- Keep it private and back it up.
-- Deleting it means your friend code is gone for good.
+      starcom chat @skye
 
-The command prints your friend code (it starts with `SC1-`). Send it to the friend you want to test with, and get theirs.
+  The first time, StarCom shows your friend's code so you can compare it with them, then remembers it.
+- While chatting, type:
+  - `/call` to ring your friend;
+  - `/accept` to answer a call, `/hangup` to end or decline one;
+  - `/mute` and `/deafen`;
+  - `/quit` to leave.
+- `starcom call @skye` does the same as `chat`, and rings straight away.
 
-## 2. Chat
-Both of you run, at roughly the same time (within 2 minutes of each other):
+On Linux, run `chmod +x starcom` once, then use `./starcom` in place of `starcom`.
 
-    starcom chat <your friend's code>
-
-Type a message and press Enter. Type `/quit` to leave.
-
-## What happens, and who sees what
-1. Your program asks the meeting point what your public address is, and leaves an encrypted note that only your friend can read.
-2. When both notes are found, the two computers connect directly. **In a direct connection your friend can see your public IP address.**
-3. If a direct connection is impossible (some routers block it), traffic goes through the relay instead. Your friend then does not see your IP; the relay sees both IPs but cannot read anything.
-4. Messages are encrypted end to end and are never stored anywhere. When you close the program, the conversation is gone.
+## Who sees what
+- **Your friend never receives your IP address,** and you never receive theirs. Everything goes through relays.
+- The relay you are linked to must see your IP address, because it has to send packets back to you. It never sees what you say, stores nothing about you on disk, and writes no logs.
+- Messages and calls are encrypted end to end and never stored anywhere. When you close StarCom, the conversation is gone.
 
 Full details are in NETWORK.md and DATA.md.
 
-## Hide my IP
-Add this line to `starcom.conf`:
-
-    hideip=1
-
-StarCom then never connects directly: your note carries no addresses of yours, and everything goes through the relay. Your friend cannot see your IP address. The relay still sees both addresses, never the content. It can be a little slower.
-
-## Linux
-- `starcom`: the Linux program (64-bit x86, about 1.3 MB, one file, nothing to install).
-- It needs a recent Linux: Ubuntu 23.10 or newer, Debian 13, Fedora 39 or newer (glibc 2.38+). On older systems, build it from the source instead: install a C++ compiler (for example `sudo apt install g++`), then run `sh build.sh` in the source folder; the program appears as `build/starcom`.
-- In a terminal in the folder with `starcom`:
-
-      chmod +x starcom
-      ./starcom id
-      ./starcom chat <your friend's code>
-
-- Everything else works the same as on Windows. `identity.key` is created readable only by you.
-- Video encoder probing uses VA-API if it is installed; without it, `probe` simply reports none.
-- macOS is not supported yet.
-
-## Other commands
-- `starcom probe`: shows which video encoders your hardware has (for future video calls).
-- `starcom id`: shows your friend code again.
-
 ## If it does not connect
-- Check that both of you typed the other's code exactly.
-- Check that both started within 2 minutes of each other.
-- If StarCom says it has no meeting point, ask whoever gave it to you for a copy that has one (or put a `starcom.conf` with `rendezvous=<host>:<port>` in the StarCom data folder).
+- Check the spelling of your friend's @name.
+- Your friend needs StarCom open (the window, or `starcom chat`).
+- If StarCom says it cannot reach the network, check your internet connection.
 - Some firewalls ask the first time whether to allow `starcom.exe`: allow it on private networks.

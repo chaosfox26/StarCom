@@ -24,7 +24,7 @@ struct Rect {
 
 inline Rect rc(float x, float y, float w, float h){ Rect r; r.x = x; r.y = y; r.w = w; r.h = h; return r; }
 
-enum class Font { Body, Small, Bold, Title, Big, Icon };
+enum class Font { Body, Small, Bold, Title, Big, Icon, Glyph, GlyphLarge, Tiny };
 enum class Align { Left, Center, Right };
 
 class Canvas {

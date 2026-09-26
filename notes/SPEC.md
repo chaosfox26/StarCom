@@ -1,7 +1,7 @@
 # PROJECT STARCOM: TECHNICAL SPECIFICATIONS & ARCHITECTURAL DIRECTIVE
 
 ## 1. PROJECT VISION & MOTIVATION
-Starcom is a "middle finger" to centralized, data-farming communication platforms. It is a strictly Peer-to-Peer (P2P), server-less, anonymous, and government-proof communication client. It is designed to replace Discord by eliminating central identity verification, data harvesting, and server infrastructure costs.
+Starcom is a "middle finger" to centralized, data-farming communication platforms. It is a strictly Peer-to-Peer (P2P), server-less, anonymous, and government-proof communication client. It is designed to replace Discord by eliminating central identity verification, data harvesting, and server infrastructure costs. 
 
 The mantra is "Stupidly Fast, Minimal Footprint." No Electron, no WebView2, no AI integration. This is a pure C++ endeavor designed for maximum hardware efficiency and user sovereignty.
 
@@ -9,13 +9,13 @@ The mantra is "Stupidly Fast, Minimal Footprint." No Electron, no WebView2, no A
 - **Language:** Native C++ only.
 - **Interoperability:** Full binary-level communication compatibility between Windows (Winsock2) and Linux (Berkeley Sockets).
 - **Transport:** Multi-lane UDP-based protocol with "Lanes" prioritized by data type (Voice > Signal > Video > Background Data).
-- **Bandwidth Budget:** Hard-coded sliding scale from 1 Mbps to 20 Mbps aggregate throughput.
+- **Bandwidth Budget:** Hard-coded sliding scale from 1 Mbps to 20 Mbps aggregate throughput. 
 - **Traffic Shaping:** Implement a "Leaky Bucket" algorithm to ensure a 20 Mbps ceiling.
 - **Network Awareness:** Hard-coded mathematical feedback loops (no AI). The engine must monitor RTT (Ping) and Jitter; if latency spikes or packet loss occurs, it must automatically downshift bitrates to protect the user's game/application stability.
 - **NAT Traversal:** Implement UDP Hole Punching via public STUN servers to allow direct P2P connections without central relay servers.
 
 ## 3. SECTOR: IDENTITY & "STAR DNS"
-- **Identity:** Cryptographic sovereignty. Every user is an Ed25519 Public/Private key pair generated locally. No emails, no phone numbers, no IDs.
+- **Identity:** Cryptographic sovereignty. Every user is an Ed25519 Public/Private key pair generated locally. No emails, no phone numbers, no IDs. 
 - **Discovery:** Distributed Name Service (Star DNS) utilizing a Kademlia-style DHT. Users map easy-to-read "Pointers" (@names) to their current IP addresses.
 - **Sticky Sessions:** Implement Connection Migration. Peers are identified by a 64-bit SessionID + Cryptographic Signature. If a user's IP changes mid-session, the connection must "follow" the new IP without dropping the call or chat.
 - **Bootstrapping:** Use DNS Seeding (hardcoded domains returning A/AAAA records) to find initial network entry points.
@@ -23,7 +23,7 @@ The mantra is "Stupidly Fast, Minimal Footprint." No Electron, no WebView2, no A
 ## 4. SECTOR: MEDIA ENGINE & CODEC NEGOTIATION
 - **Hardware Probing:** On startup, the client must use native OS APIs (Windows Media Foundation / Linux VA-API) to detect GPU capabilities (Nvidia NVENC, AMD AMF, Intel QuickSync).
 - **Negotiation Protocol:** A mandatory "Handshake" must occur before any media stream. Peers trade "Capability JSONs." The system must lock to the highest common denominator codec supported by both hardware sets to prevent overloading weaker machines.
-- **Codec Tiers:**
+- **Codec Tiers:** 
     1. AV1 (Hardware)
     2. HEVC/H.265 (Hardware)
     3. H.264 (Hardware)
@@ -32,7 +32,7 @@ The mantra is "Stupidly Fast, Minimal Footprint." No Electron, no WebView2, no A
 - **On-Demand Media:** Implement "Hyperlink Streaming." Shared videos are announced via metadata hashes. The video only streams (via chunked P2P transfer) when a recipient hits "Play."
 
 ## 5. SECTOR: ANONYMITY & ANTI-DOXING
-- **Tiered Privacy:**
+- **Tiered Privacy:** 
     - **Direct Path:** IP-to-IP for trusted "Friend List" peers (Max Speed).
     - **Masked Path:** For Hubs/Strangers, traffic must be routed through a "Volunteer Peer Relay."
 - **Blind Relaying:** Starcom clients must be able to act as community bridges. Relaying must be "Blind" (End-to-End Encrypted via AES-NI/ChaCha20). The relaying peer has zero visibility into the payload and acts as a "Dumb Pipe."

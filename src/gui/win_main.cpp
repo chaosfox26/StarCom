@@ -41,17 +41,19 @@ public:
     IDWriteFactory* dw = nullptr;
     ID2D1HwndRenderTarget* rt = nullptr;
     ID2D1SolidColorBrush* brush = nullptr;
-    IDWriteTextFormat* fmt[6] = {};
+    IDWriteTextFormat* fmt[9] = {};
     int clips = 0;
 
     bool init(){
         if(FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &factory))) return false;
         if(FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&dw))) return false;
-        const struct { float size; DWRITE_FONT_WEIGHT w; const wchar_t* face; } spec[6] = {
+        const struct { float size; DWRITE_FONT_WEIGHT w; const wchar_t* face; } spec[9] = {
             { 15.0f, DWRITE_FONT_WEIGHT_NORMAL, L"Segoe UI" }, { 12.5f, DWRITE_FONT_WEIGHT_NORMAL, L"Segoe UI" },
             { 15.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, L"Segoe UI" }, { 20.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, L"Segoe UI" },
-            { 26.0f, DWRITE_FONT_WEIGHT_BOLD, L"Segoe UI" }, { 18.0f, DWRITE_FONT_WEIGHT_NORMAL, L"Segoe UI Emoji" } };
-        for(int i = 0; i < 6; i++){
+            { 26.0f, DWRITE_FONT_WEIGHT_BOLD, L"Segoe UI" }, { 18.0f, DWRITE_FONT_WEIGHT_NORMAL, L"Segoe UI Emoji" },
+            { 16.0f, DWRITE_FONT_WEIGHT_NORMAL, L"Segoe MDL2 Assets" }, { 22.0f, DWRITE_FONT_WEIGHT_NORMAL, L"Segoe MDL2 Assets" },
+            { 11.0f, DWRITE_FONT_WEIGHT_NORMAL, L"Segoe UI" } };
+        for(int i = 0; i < 9; i++){
             if(FAILED(dw->CreateTextFormat(spec[i].face, nullptr, spec[i].w, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, spec[i].size, L"", &fmt[i]))) return false;
         }
         return true;

@@ -20,6 +20,8 @@ struct HwCaps {
 
 HwCaps probeHardware();
 std::string capsJson(const HwCaps& c);
+std::string capsJson(const HwCaps& c, const std::string& name);
+std::string capsName(const std::string& caps);
 std::string bestTier(const HwCaps& c);
 std::string negotiate(const std::string& mine, const std::string& peer);
 

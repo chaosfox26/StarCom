@@ -213,6 +213,10 @@ bool Engine::poll(int timeoutMs, std::string& err){
     uint8_t in[kMaxPacket], plain[kMaxPacket];
     Addr from;
     int r = s_.recvFrom(in, sizeof in, from, wait < 0 ? 0 : wait);
+    if(r < 0){
+        err = "the conversation was closed";
+        return false;
+    }
     now = engineNowMs();
     if(r > 0){
         Lane lane;
@@ -296,6 +300,7 @@ EngineStats Engine::stats() const {
     s.voiceTargetKbps = voiceKbps_;
     s.voiceFrameMs = voiceFrameMs_;
     s.state = state_;
+    s.lastRecvAgeMs = (int)(now - lastRecvMs_);
     return s;
 }
 

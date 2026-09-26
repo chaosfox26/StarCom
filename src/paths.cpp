@@ -1,5 +1,4 @@
 #include "paths.h"
-#include "seed.h"
 #include <cstdlib>
 
 #ifdef _WIN32
@@ -65,18 +64,5 @@ bool enterDataDir(std::string& where, std::string& err){
     return true;
 }
 #endif
-
-std::string defaultRendezvous(){
-#ifdef STARCOM_DEFAULT_RENDEZVOUS
-    return STARCOM_DEFAULT_RENDEZVOUS;
-#else
-    return std::string();
-#endif
-}
-
-std::string meetingPoint(const std::string& confFile){
-    std::string v = configValue(confFile, "rendezvous");
-    return v.empty() ? defaultRendezvous() : v;
-}
 
 }

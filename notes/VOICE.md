@@ -78,18 +78,19 @@ Measurement and adaptation belong to the **engine** (ENGINE.md), which the spec 
 
 - **Caps:** default 32 kbps; user setting up to 64 kbps for voice; 510 kbps is reserved for music mode later.
 
-## 7. Call flow
-- `starcom call <friend code>`: the same meeting-point and connection steps as `chat`, then a CALL offer on the Signal lane.
-- The other side sees "incoming call from SC1-XXXXX" and accepts or declines. Nothing opens the microphone without the user accepting.
-- Hang up: a HANGUP message, and the microphone closes at once.
-- Chat keeps working during a call on the same session.
-- Mute: a local toggle. While muted nothing is encoded; DTX-style keepalive only.
+## 7. Call flow (voice control on the engine's channel 3, Signal lane)
+- Messages: RING, ACCEPT and HANGUP, each carrying a 64-bit call id.
+- Calling sends RING every second until an ACCEPT or a HANGUP arrives, or 45 seconds pass ("No answer").
+- The called side sees "Incoming call" (window: Accept / Decline; command line: /accept or /hangup). **The microphone opens only after the call is accepted, on both sides.**
+- ACCEPT answers every RING of the same call (repeated if needed); HANGUP is sent three times.
+- If both press call at once, the side with the lower key keeps its call id and the other side accepts it.
+- "Call lost" after 15 seconds without anything from your friend.
+- Chat keeps working during a call, on the same session.
+- Mute sends silence; Deafen silences what you hear. Both are local switches.
 
 ## 8. Who sees what (for NETWORK.md and DATA.md)
 - **Audio** is encrypted end to end with the session keys, and **never stored** on disk, by either side or any relay.
-- **Direct connection:** your friend sees your IP (as with chat).
-- **Relay:** the relay sees both IPs, packet sizes and timing. With variable bitrate, packet sizes rise and fall with speech. That is a known weakness of VBR voice in every encrypted voice app.
-  - A later "constant-size voice packets" option pads every packet to a fixed size, at a bandwidth cost. It is documented and off by default.
+- Voice travels through the relays like everything else: your friend never receives your IP address. Each relay sees packet sizes and timing (which rise and fall with speech with variable bitrate) but never the content. A constant-size-packet option is still planned (off by default).
 - **The microphone** is open only between accepting a call and hanging up. The app shows this.
 
 ## 9. Test plan

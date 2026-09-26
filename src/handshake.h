@@ -18,6 +18,23 @@ struct Session {
 
 bool hsInitiate(UdpSocket& s, const Addr& to, const Identity& me, const uint8_t peerPub[32], const std::string& myCaps, Session& out, std::string& peerCaps, std::string& err, int timeoutMs);
 bool hsRespond(UdpSocket& s, const Identity& me, const std::string& myCaps, Session& out, std::string& peerCaps, std::string& err, int timeoutMs, const uint8_t* onlyPeer = nullptr);
+bool hsPeek(const uint8_t* pkt, size_t n, const Identity& me, uint8_t peerEdPub[32], std::string& peerCaps, uint64_t& stamp);
+bool hsAccept(const uint8_t* pkt, size_t n, const Identity& me, const std::string& myCaps, Session& out, std::string& peerCaps, uint64_t& stamp, uint8_t* reply, size_t cap, size_t& replyLen);
+
+class HsDialer {
+public:
+    bool begin(const Identity& me, const uint8_t peerPub[32], const std::string& myCaps, uint8_t* pkt, size_t cap, size_t& n);
+    bool finish(const uint8_t* pkt, size_t n, Session& out, std::string& peerCaps);
+    uint64_t id() const { return id_; }
+    ~HsDialer();
+
+private:
+    NoiseHandshake hs_;
+    uint64_t id_ = 0;
+    uint8_t peerPub_[32] = {0};
+    bool active_ = false;
+};
+
 bool sessionSeal(Session& s, Lane lane, const uint8_t* plain, size_t n, uint8_t* out, size_t cap, size_t& outLen);
 bool sessionOpen(Session& s, const uint8_t* pkt, size_t n, const Addr& from, Lane& lane, uint8_t* out, size_t cap, size_t& outLen);
 void sessionWipe(Session& s);

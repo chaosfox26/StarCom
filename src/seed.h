@@ -5,7 +5,6 @@
 
 namespace sc {
 
-std::string configValue(const std::string& path, const std::string& key);
-bool seedLookup(const std::string& name, uint16_t port, std::vector<Addr>& out, std::string& err);
+bool seedNodes(std::vector<Addr>& out, std::string& err);
 
 }

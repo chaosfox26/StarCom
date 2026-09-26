@@ -1,4 +1,5 @@
 #include "platform_net.h"
+#include <chrono>
 #include <cstring>
 
 #ifdef _WIN32
@@ -163,13 +164,40 @@ bool UdpSocket::open(int family, uint16_t port, std::string& err){
     return true;
 }
 
+void PacketQueue::push(const uint8_t* p, size_t n, const Addr& from){
+    {
+        std::lock_guard<std::mutex> g(mu);
+        if(closed) return;
+        if(q.size() >= 256) q.pop_front();
+        q.emplace_back(std::vector<uint8_t>(p, p + n), from);
+    }
+    cv.notify_one();
+}
+
+void PacketQueue::shut(){
+    {
+        std::lock_guard<std::mutex> g(mu);
+        closed = true;
+    }
+    cv.notify_all();
+}
+
+void UdpSocket::attach(UdpSocket& shared, std::shared_ptr<PacketQueue> inbox, std::function<int(const uint8_t*, size_t, const Addr&)> send){
+    close();
+    parent_ = &shared;
+    inbox_ = std::move(inbox);
+    send_ = std::move(send);
+}
+
 int UdpSocket::sendTo(const uint8_t* p, size_t n, const Addr& to){
+    if(send_) return send_(p, n, to);
+    UdpSocket* par = parent_;
+    if(par) return par->sendTo(p, n, to);
     if((sock_t)s_ == BAD_SOCK) return -1;
     return (int)::sendto((sock_t)s_, (const char*)p, (int)n, 0, (const sockaddr*)to.raw, to.len);
 }
 
 int UdpSocket::recvFrom(uint8_t* p, size_t cap, Addr& from, int timeoutMs){
-    if((sock_t)s_ == BAD_SOCK) return -1;
     if(!held_.empty()){
         Held h = held_.front();
         held_.pop_front();
@@ -178,6 +206,19 @@ int UdpSocket::recvFrom(uint8_t* p, size_t cap, Addr& from, int timeoutMs){
         from = h.from;
         return (int)n;
     }
+    std::shared_ptr<PacketQueue> box = inbox_;
+    if(box){
+        std::unique_lock<std::mutex> g(box->mu);
+        box->cv.wait_for(g, std::chrono::milliseconds(timeoutMs < 0 ? 0 : timeoutMs), [&box]{ return box->closed || !box->q.empty(); });
+        if(box->q.empty()) return box->closed ? -1 : 0;
+        auto pk = std::move(box->q.front());
+        box->q.pop_front();
+        size_t n = pk.first.size() < cap ? pk.first.size() : cap;
+        if(n) std::memcpy(p, pk.first.data(), n);
+        from = pk.second;
+        return (int)n;
+    }
+    if((sock_t)s_ == BAD_SOCK) return -1;
 #ifdef _WIN32
     WSAPOLLFD pf;
     pf.fd = (sock_t)s_;
@@ -203,6 +244,8 @@ int UdpSocket::recvFrom(uint8_t* p, size_t cap, Addr& from, int timeoutMs){
 }
 
 uint16_t UdpSocket::localPort() const {
+    const UdpSocket* par = parent_;
+    if(par) return par->localPort();
     if((sock_t)s_ == BAD_SOCK) return 0;
     sockaddr_storage ss;
     socklen_t sl = sizeof ss;
@@ -222,6 +265,9 @@ void UdpSocket::unread(const uint8_t* p, size_t n, const Addr& from){
 
 void UdpSocket::close(){
     held_.clear();
+    parent_ = nullptr;
+    inbox_.reset();
+    send_ = nullptr;
     if((sock_t)s_ != BAD_SOCK){ closeSock((sock_t)s_); s_ = (intptr_t)BAD_SOCK; }
 }
 
