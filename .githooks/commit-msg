@@ -1,0 +1,2 @@
+#!/bin/sh
+python tools/pii-scan.py --msg "$1" || exit 1
