@@ -21,3 +21,6 @@ __pycache__/
 Thumbs.db
 desktop.ini
 .DS_Store
+identity.key
+starcom.conf
+*.key
