@@ -27,20 +27,40 @@ void addUnique(std::vector<Addr>& v, const Addr& a){
     v.push_back(a);
 }
 
+bool isSessionPacket(const uint8_t* p, size_t n){
+    Header h;
+    return readHeader(p, n, h) && (h.type == PacketType::Hello || h.type == PacketType::Welcome || h.type == PacketType::Data);
+}
+
+struct Keeper {
+    UdpSocket& s;
+    std::vector<std::pair<std::vector<uint8_t>, Addr>> kept;
+    explicit Keeper(UdpSocket& sock) : s(sock) {}
+    void keep(const uint8_t* p, size_t n, const Addr& from){
+        if(kept.size() < 32 && isSessionPacket(p, n)) kept.emplace_back(std::vector<uint8_t>(p, p + n), from);
+    }
+    ~Keeper(){
+        for(auto& k : kept) s.unread(k.first.data(), k.first.size(), k.second);
+    }
+};
+
 bool drainServer(UdpSocket& s, const Addr& server, uint8_t wantOp, Addr& observed, std::vector<uint8_t>& blob, int timeoutMs){
     auto until = Clock::now() + std::chrono::milliseconds(timeoutMs);
     uint8_t in[kMaxPacket];
+    Keeper keeper(s);
     while(Clock::now() < until){
         Addr from;
         int left = (int)std::chrono::duration_cast<std::chrono::milliseconds>(until - Clock::now()).count();
         int r = s.recvFrom(in, sizeof in, from, left > 0 ? left : 0);
         if(r <= 0) continue;
-        if(!sameAddr(from, server)) continue;
         uint8_t op = 0;
         Addr obs;
         const uint8_t* b = nullptr;
         size_t bl = 0;
-        if(!parseRendezvous(in, (size_t)r, op, obs, b, bl)) continue;
+        if(!sameAddr(from, server) || !parseRendezvous(in, (size_t)r, op, obs, b, bl)){
+            keeper.keep(in, (size_t)r, from);
+            continue;
+        }
         if(op == wantOp || (wantOp == kRvFound && op == kRvMissing)){
             observed = obs;
             blob.assign(b, b + bl);
@@ -53,13 +73,15 @@ bool drainServer(UdpSocket& s, const Addr& server, uint8_t wantOp, Addr& observe
 int waitBind(UdpSocket& s, const Addr& server, int timeoutMs){
     auto until = Clock::now() + std::chrono::milliseconds(timeoutMs);
     uint8_t in[kMaxPacket];
+    Keeper keeper(s);
     while(Clock::now() < until){
         Addr from;
         int left = (int)std::chrono::duration_cast<std::chrono::milliseconds>(until - Clock::now()).count();
         int r = s.recvFrom(in, sizeof in, from, left > 0 ? left : 0);
-        if(r <= 0 || !sameAddr(from, server)) continue;
+        if(r <= 0) continue;
         uint8_t count = 0;
-        if(parseRelayReply(in, (size_t)r, count)) return count;
+        if(sameAddr(from, server) && parseRelayReply(in, (size_t)r, count)) return count;
+        keeper.keep(in, (size_t)r, from);
     }
     return 0;
 }
@@ -206,9 +228,29 @@ private:
 
 }
 
-void announceOffline(UdpSocket& s, const Identity& me, const uint8_t friendPub[32], const Addr& server){
-    Presence pr(s, me, friendPub, server);
-    if(pr.ok()) pr.put(true);
+bool OfflineNotice::arm(UdpSocket& s, const Identity& me, const uint8_t friendPub[32], const Addr& server){
+    if(!friendSecret(me, friendPub, shared_)) return false;
+    std::memcpy(myPub_, me.pub, 32);
+    s_ = &s;
+    server_ = server;
+    armed_ = true;
+    return true;
+}
+
+void OfflineNotice::send(){
+    if(!armed_ || sent_.exchange(true)) return;
+    uint8_t mine[32], note[kMaxNote], pkt[kMaxPacket];
+    mailboxId(shared_, currentHour(), myPub_, mine);
+    std::vector<Addr> none;
+    size_t nl = sealNote(shared_, myPub_, mine, none, note, sizeof note);
+    if(!nl) return;
+    size_t pn = buildPut(mine, note, nl, pkt, sizeof pkt);
+    s_->sendTo(pkt, pn, server_);
+    s_->sendTo(pkt, pn, server_);
+}
+
+OfflineNotice::~OfflineNotice(){
+    crypto_wipe(shared_, sizeof shared_);
 }
 
 bool connectFriend(UdpSocket& s, const Identity& me, const uint8_t friendPub[32], const Addr& server,

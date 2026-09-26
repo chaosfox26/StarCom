@@ -170,6 +170,14 @@ int UdpSocket::sendTo(const uint8_t* p, size_t n, const Addr& to){
 
 int UdpSocket::recvFrom(uint8_t* p, size_t cap, Addr& from, int timeoutMs){
     if((sock_t)s_ == BAD_SOCK) return -1;
+    if(!held_.empty()){
+        Held h = held_.front();
+        held_.pop_front();
+        size_t n = h.data.size() < cap ? h.data.size() : cap;
+        if(n) std::memcpy(p, h.data.data(), n);
+        from = h.from;
+        return (int)n;
+    }
 #ifdef _WIN32
     WSAPOLLFD pf;
     pf.fd = (sock_t)s_;
@@ -204,7 +212,16 @@ uint16_t UdpSocket::localPort() const {
     return 0;
 }
 
+void UdpSocket::unread(const uint8_t* p, size_t n, const Addr& from){
+    if(held_.size() >= 32 || n == 0) return;
+    Held h;
+    h.data.assign(p, p + n);
+    h.from = from;
+    held_.push_back(h);
+}
+
 void UdpSocket::close(){
+    held_.clear();
     if((sock_t)s_ != BAD_SOCK){ closeSock((sock_t)s_); s_ = (intptr_t)BAD_SOCK; }
 }
 

@@ -1,5 +1,6 @@
 #include "chat.h"
 #include "console.h"
+#include "exitguard.h"
 #include "handshake.h"
 #include "hwprobe.h"
 #include "identity.h"
@@ -183,16 +184,19 @@ static int cmdChat(const std::string& code){
     UdpSocket s;
     if(!s.open(server.family(), 0, err)){ identityWipe(id); std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
     std::printf("You are %s\n", friendCode(id.pub).c_str());
+    static OfflineNotice notice;
+    if(!notice.arm(s, id, friendPub, server)){ identityWipe(id); std::fprintf(stderr, "could not derive the shared secret with that friend\n"); return 1; }
+    installExitHook([]{ notice.send(); });
     Session ses;
     std::string peerCaps;
     bool hideIp = configValue(CONF_FILE, "hideip") == "1";
     bool ok = connectFriend(s, id, friendPub, server, myCaps, hideIp, ses, peerCaps, err, [](const std::string& m){ consolePrint("* " + m + "\n"); });
-    if(!ok){ announceOffline(s, id, friendPub, server); identityWipe(id); std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    identityWipe(id);
+    if(!ok){ notice.send(); std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
     report(ses, myCaps, peerCaps);
     int rc = chatWith(s, ses);
     sessionWipe(ses);
-    announceOffline(s, id, friendPub, server);
-    identityWipe(id);
+    notice.send();
     return rc;
 }
 

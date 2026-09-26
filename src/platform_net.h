@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <deque>
 #include <vector>
 
 namespace sc {
@@ -35,8 +36,14 @@ public:
     int recvFrom(uint8_t* p, size_t cap, Addr& from, int timeoutMs);
     uint16_t localPort() const;
     void close();
+    void unread(const uint8_t* p, size_t n, const Addr& from);
 private:
+    struct Held {
+        std::vector<uint8_t> data;
+        Addr from;
+    };
     intptr_t s_;
+    std::deque<Held> held_;
 };
 
 }
