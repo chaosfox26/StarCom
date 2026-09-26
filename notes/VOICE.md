@@ -109,4 +109,4 @@ Measurement and adaptation belong to the **engine** (ENGINE.md), which the spec 
   - FEC and concealment;
   - WASAPI;
   - `call` command.
-- **Linux audio** (PulseAudio or ALSA) after the engine.
+- **Linux audio: done.** The PulseAudio simple API (which also serves PipeWire), loaded at run time with dlopen, with ALSA as the fallback. No new build dependency. Tested on Linux (T1-T3), and live between Windows and Linux over the internet (T4).

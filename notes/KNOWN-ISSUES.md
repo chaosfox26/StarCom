@@ -4,7 +4,6 @@
 - **Reconnecting after a restart takes a few seconds.** If your friend closes and reopens StarCom, the relay hands any conversation that was waiting for them to their new StarCom, and new ones start fresh: reconnecting takes about 1 to 3 seconds (measured). A chat that was open at that moment ends and starts again.
 - **Relay link lost = chats end.** If your link to your relay drops (for example, your internet goes away for more than a minute), open chats and calls end and StarCom reconnects by itself. Click your friend again to continue.
 - **Calls need headphones:** there is no echo cancellation yet.
-- **Voice calls are Windows-only for now;** the Linux version has text chat. Linux audio is planned.
 - **The window is Windows-only for now;** Linux uses the command line. The window's icons come from a font built into Windows; the Linux window will need its own icons.
 - **No servers (group spaces) yet.** The Add Server button says so. Direct messages and calls work.
 - **No file sending yet.** The + in the message box says so. When it arrives, every file will pass through the metadata scrubber first (SPEC section 5).

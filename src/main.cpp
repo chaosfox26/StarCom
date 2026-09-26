@@ -43,7 +43,7 @@ static int usage(){
         "  starcom                    open the StarCom window (Windows)\n"
         "  starcom name <name>        choose your @name (friends find you by it)\n"
         "  starcom chat @name         chat with a friend; neither of you can see the other's IP address\n"
-        "  starcom call @name         the same, and ring your friend straight away (Windows; use headphones)\n"
+        "  starcom call @name         the same, and ring your friend straight away (use headphones)\n"
         "  starcom id                 show your friend code\n"
         "  starcom probe              show your hardware video encoders\n"
         "  starcom seed               look up this copy's network entry points\n"
@@ -105,7 +105,7 @@ static int chatWithCall(UdpSocket& s, Session& ses, const std::string& tag, bool
             else consolePrint("* incoming call: type /accept to answer or /hangup to decline (use headphones)\n");
         }
         else if(st == CallState::Calling) consolePrint("* calling... (/hangup to cancel)\n");
-        else if(st == CallState::InCall) consolePrint("* in call: /mute, /deafen, /hangup (use headphones: there is no echo cancellation yet)\n");
+        else if(st == CallState::InCall) consolePrint("* in call: /mute, /deafen, /stats, /hangup (use headphones: there is no echo cancellation yet)\n");
         else if(st == CallState::Ended) consolePrint("* " + vc.note() + "\n");
     });
     consolePrint("\nChat open with " + tag + ". Type a message and press Enter. /call to start a voice call, /quit to leave.\n");
@@ -122,6 +122,14 @@ static int chatWithCall(UdpSocket& s, Session& ses, const std::string& tag, bool
             if(line == "/hangup"){ vc.hangup(); continue; }
             if(line == "/mute"){ vc.setMuted(!vc.muted()); consolePrint(vc.muted() ? "* muted\n" : "* unmuted\n"); continue; }
             if(line == "/deafen"){ vc.setDeafened(!vc.deafened()); consolePrint(vc.deafened() ? "* deafened\n" : "* undeafened\n"); continue; }
+            if(line == "/stats"){
+                VoiceStats v = vc.stats();
+                char buf[200];
+                std::snprintf(buf, sizeof buf, "* voice: %llu packets in, %llu played, %llu filled in, %llu rebuilt by FEC, %llu late; ping %d ms\n",
+                    (unsigned long long)v.received, (unsigned long long)v.played, (unsigned long long)v.concealed, (unsigned long long)v.recoveredFec, (unsigned long long)v.late, vc.pingMs());
+                consolePrint(buf);
+                continue;
+            }
             return true;
         }
     };
