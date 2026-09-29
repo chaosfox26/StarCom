@@ -40,7 +40,6 @@ private:
     std::atomic<uint64_t> callId_{0};
     std::atomic<bool> muted_{false};
     std::atomic<bool> deafened_{false};
-    std::atomic<bool> wantAudio_{false};
     std::atomic<int> pingMs_{0};
     std::atomic<uint32_t> ringStartMs_{0};
     std::atomic<uint32_t> lastRingMs_{0};

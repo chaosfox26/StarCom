@@ -54,6 +54,7 @@ const uint32_t kAssemblyMs = 30000;
 const uint32_t kEpochGraceMs = 300000;
 const uint32_t kGenGraceMs = 30000;
 const uint32_t kReplyGapMs = 10000;
+const size_t kMaxReplyMemory = 256;
 const uint32_t kReofferMs = 30000;
 const uint64_t kFutureMs = 60000;
 const uint64_t kWindowMs = 600000;
@@ -63,6 +64,7 @@ const uint32_t kPalette[] = { 0xE0218A, 0x3D5AFE, 0x9C27B0, 0x2979FF, 0xD81B60, 
 const char* kFileMagicRecords = "SCR1";
 const char* kFileMagicKeys = "SCK2";
 const uint32_t kKeyHorizon = 1080;
+const uint32_t kKeyClockSlack = 2;
 const uint32_t kRekeyAfter = 720;
 const uint32_t kRekeyRetryMs = 60000;
 const size_t kKeyEntry = 8 + 2 + 4 + 32 + 4 + 32 + 32 + 64;
@@ -391,6 +393,12 @@ struct HubCore::Impl {
         auto k = std::make_pair(hub, ((uint64_t)kind << 56) ^ (about & 0x00FFFFFFFFFFFFFFull));
         auto it = pi.lastReply.find(k);
         if(it != pi.lastReply.end() && now - it->second < kReplyGapMs) return false;
+        if(pi.lastReply.size() >= kMaxReplyMemory){
+            for(auto e = pi.lastReply.begin(); e != pi.lastReply.end();){
+                if(now - e->second >= kReplyGapMs) e = pi.lastReply.erase(e); else ++e;
+            }
+            if(pi.lastReply.size() >= kMaxReplyMemory) return false;
+        }
         pi.lastReply[k] = now;
         return true;
     }
@@ -411,6 +419,13 @@ struct HubCore::Impl {
         std::error_code ec;
         std::filesystem::create_directories(dir, ec);
         std::string tmp = path + ".tmp";
+        if(secret){
+            {
+                std::ofstream touch(tmp, std::ios::binary | std::ios::trunc);
+                if(!touch) return false;
+            }
+            std::filesystem::permissions(tmp, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write, std::filesystem::perm_options::replace, ec);
+        }
         {
             std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
             if(!f) return false;
@@ -874,7 +889,7 @@ struct HubCore::Impl {
             for(const Channel& c : h.man.channels) if(c.id == ch) known = true;
             bool im = false;
             if(!known || gen == 0 || roleIn(h, ik.issuer, im) < HubRole::Admin || !im) continue;
-            if(epoch < ik.e0 || epoch > ik.e0 + kKeyHorizon || nowEpoch > ik.e0 + kKeyHorizon) continue;
+            if(epoch < ik.e0 || epoch > ik.e0 + kKeyHorizon || nowEpoch > ik.e0 + kKeyHorizon || ik.e0 > nowEpoch + kKeyClockSlack) continue;
             std::vector<uint8_t> st = keyStatement(h.id, ch, gen, ik.e0, ik.commit);
             if(crypto_ed25519_check(ik.sig, ik.issuer.data(), st.data(), st.size()) != 0) continue;
             if(commitOf(ik.key, epoch, ik.e0) != ik.commit) continue;
@@ -1494,6 +1509,8 @@ struct HubCore::Impl {
             if(kv.first == myKey || !kv.second.online || kv.second.vc != voiceVc || now - kv.second.seenMs > kPresenceTtlMs) continue;
             if(it->second.eff.count(kv.first)) out.push_back(kv.first);
         }
+        std::sort(out.begin(), out.end());
+        if(out.size() > kMaxVoiceChannelPeople - 1) out.resize(kMaxVoiceChannelPeople - 1);
         return out;
     }
 
@@ -1698,6 +1715,7 @@ void HubCore::onFrame(const uint8_t peer[32], const uint8_t* p, size_t n){
         bool pending = false;
         for(const PendingJoin& j : p_->joins) if(j.inviter == from && j.sent) pending = true;
         if(!pending) return;
+        for(auto& other : p_->hubs) if(!other.second.joined) return;
         Hub& h = p_->hubs[hubId];
         h.id = hubId;
         hit = p_->hubs.find(hubId);
@@ -1777,6 +1795,16 @@ void HubCore::tick(uint32_t){
     }
     for(auto& pk : p_->peers){
         for(auto it = pk.second.assembly.begin(); it != pk.second.assembly.end();) if(p_->now - it->second.startMs > kAssemblyMs) it = pk.second.assembly.erase(it); else ++it;
+    }
+    if(p_->joins.empty()){
+        std::vector<Key> stale;
+        for(auto& kv : p_->hubs) if(!kv.second.joined) stale.push_back(kv.first);
+        for(const Key& id : stale){
+            Hub& sh = p_->hubs[id];
+            p_->removeFiles(sh);
+            p_->wipeKeys(sh);
+            p_->hubs.erase(id);
+        }
     }
     std::vector<Key> ids;
     for(auto& kv : p_->hubs) ids.push_back(kv.first);

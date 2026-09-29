@@ -7,6 +7,7 @@
 - **Relay link lost = chats end.** If your link to your relay drops (for example, your internet goes away for more than a minute), open chats and calls end and StarCom reconnects by itself. Click your friend again to continue.
 - **A wrong clock can lock you out for a while.** A relay accepts a connection request only if its timestamp is newer than the last one it saw from the same key, which stops old requests being replayed. If your computer's clock runs ahead and is then set back (for example when the time is corrected shortly after start-up), the relay ignores you until your clock passes the earlier time or the relay restarts, and StarCom just reports that it cannot reach the network. Fixing this means choosing how to keep replay protection without depending on the clock; it is not fixed yet.
 - **Star DNS can be flooded.** Each Star DNS node keeps at most 10,000 records. When it is full, storing a new @name pushes out the record that expires soonest, even if it is still live. Someone who publishes a very large number of names could push out other people's records and then register one of those @names under their own key; the real owner would then be refused when publishing that name at that node. Friends you have already added are not affected, because your friends list remembers each friend's key. Compare friend codes when adding someone new. Fixing this means choosing between limits per publisher and refusing new names when the node is full; it is not fixed yet.
+- **Anyone can fill a person's relay slots.** A relay allows 64 open conversations per person, and any StarCom that can reach the relay can open conversations to someone's key. Doing so 64 times stops that person opening or receiving conversations until the slots idle out (about 2 minutes), and it can be repeated. Fixing this needs limits per opener; it is not fixed yet.
 - **Calls need headphones:** there is no echo cancellation yet.
 - **The window is Windows-only for now;** Linux uses the command line. The window's icons come from a font built into Windows; the Linux window will need its own icons.
 - **Hubs, first version** (see HUBS.md):
@@ -15,7 +16,11 @@
   - if a member changes their @name, the others cannot reach them until they join again with a new invite;
   - hub messages are not stored, so members who are offline miss them;
   - a voice channel and a direct call cannot run at the same time;
-  - the owner cannot leave or hand over their own hub yet.
+  - the owner cannot leave or hand over their own hub yet;
+  - a member who was kicked (not banned) can join again with an invite that is still valid, so ban to keep someone out;
+  - other members take the admitting admin's word for a new member's @name, so a dishonest admin could admit someone under another person's name;
+  - a dishonest admin can use up the hub's key generations, after which kicking and banning no longer change the keys and the owner needs to make a new hub;
+  - each admin can have at most 32 kicks, bans and admissions waiting for the owner to fold them in (512 per hub); beyond that the oldest is lost, so an admin who admits a 33rd person while the owner is away silently drops the first.
 - **No file sending yet.** The + in the message box says so. The picture scrubber is finished (SCRUB.md, `starcom scrub`) and handles JPEG, PNG, GIF and WebP; when sending arrives, every file will pass through it first (SPEC section 5), and any other kind of file will be refused until a scrubber for it exists.
 - **The identity file is not encrypted yet** (see DATA.md).
 - **@names are first come, first served.** Nobody can take an @name while its owner's record is live, and the friends list remembers each friend's key, so nobody can pretend to be a friend you already have. When adding someone new, compare their friend code with them if you want to be sure.

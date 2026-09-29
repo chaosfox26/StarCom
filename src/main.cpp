@@ -131,18 +131,15 @@ static int cmdScrub(const std::string& inPath, const std::string& outPath){
     return 0;
 }
 
-static int chatWithCall(UdpSocket& s, Session& ses, const std::string& tag, bool lower, bool startCall, bool autoAccept, LineInput& input){
+static int chatWithCall(UdpSocket& s, Session& ses, const std::string& tag, bool lower, bool startCall, LineInput& input){
     Engine e(s, ses);
     VoiceCall vc(e, lower);
     std::atomic<int> shown((int)CallState::Idle);
-    vc.setOnChange([&vc, &shown, autoAccept](){
+    vc.setOnChange([&vc, &shown](){
         CallState st = vc.state();
         if((int)st == shown.load()) return;
         shown = (int)st;
-        if(st == CallState::Ringing){
-            if(autoAccept) vc.accept();
-            else consolePrint("* incoming call: type /accept to answer or /hangup to decline (use headphones)\n");
-        }
+        if(st == CallState::Ringing) consolePrint("* incoming call: type /accept to answer or /hangup to decline (use headphones)\n");
         else if(st == CallState::Calling) consolePrint("* calling... (/hangup to cancel)\n");
         else if(st == CallState::InCall) consolePrint("* in call: /mute, /deafen, /stats, /hangup (use headphones: there is no echo cancellation yet)\n");
         else if(st == CallState::Ended) consolePrint("* " + vc.note() + "\n");
@@ -389,7 +386,7 @@ static int cmdChatName(const std::string& arg, bool voice){
         else consolePrint("* switched to @" + fname + "'s connection (you both connected at once)\n");
         bool startCall = voice && first;
         first = false;
-        rc = chatWithCall(*ch, ses, "@" + fname, lower, startCall, voice, input);
+        rc = chatWithCall(*ch, ses, "@" + fname, lower, startCall, input);
         {
             std::lock_guard<std::mutex> g(pm);
             current = nullptr;

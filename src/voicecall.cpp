@@ -58,7 +58,6 @@ void VoiceCall::setState(CallState s, const std::string& note){
         note_ = note;
         fn = onChange_;
     }
-    wantAudio_ = s == CallState::InCall;
     if(s == CallState::InCall) callStartMs_ = engineNowMs();
     if(fn) fn();
 }
@@ -150,7 +149,8 @@ void VoiceCall::tickLoop(){
     uint32_t lastTune = 0;
     while(!quit_){
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        if(wantAudio_ && !audioOn_){
+        bool wantAudio = state() == CallState::InCall;
+        if(wantAudio && !audioOn_){
             std::string err;
             audioOn_ = audio_.start(
                 [this](const float* frame){
@@ -166,7 +166,7 @@ void VoiceCall::tickLoop(){
             if(audioOn_) audio_.setMuted(muted_);
             else { for(int i = 0; i < 3; i++) control(kHangup, callId_); setState(CallState::Ended, err.empty() ? "Your microphone or speakers could not start." : err); }
         }
-        if(!wantAudio_ && audioOn_){ audio_.stop(); audioOn_ = false; }
+        if(!wantAudio && audioOn_){ audio_.stop(); audioOn_ = false; }
         uint32_t now = engineNowMs();
         CallState s = state();
         if(s == CallState::Calling){

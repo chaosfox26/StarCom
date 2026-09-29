@@ -273,7 +273,8 @@ void BridgeHost::dispatch(int idx, const uint8_t* p, size_t n){
         int ti = -1;
         for(size_t i = 0; i < links_.size(); i++) if(links_[i]->welcomed && std::memcmp(links_[i]->relayPub, target, 32) == 0) ti = (int)i;
         std::lock_guard<std::mutex> g(mu_);
-        bool full = partner_.size() / 2 >= kMaxPairs || kbps_ * 10 > capKbps_ * 9;
+        int currentKbps = (int32_t)(nowMs() - windowStart_) > 2000 ? 0 : kbps_;
+        bool full = partner_.size() / 2 >= kMaxPairs || currentKbps * 10 > capKbps_ * 9;
         uint64_t co = 0;
         if(ti >= 0 && !full && !partner_.count(me)){
             while(co == 0 || partner_.count(End{ ti, co })) if(!sysRandom((uint8_t*)&co, sizeof co)) break;

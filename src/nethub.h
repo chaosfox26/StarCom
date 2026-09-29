@@ -68,6 +68,7 @@ struct Friend {
 struct HubChannelLines {
     uint64_t channel = 0;
     std::vector<ChatLine> lines;
+    uint64_t trimmed = 0;
     int unread = 0;
 };
 

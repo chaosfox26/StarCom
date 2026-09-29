@@ -86,6 +86,16 @@ expect "$W/ha.out" "@bob (member, online)" 10 "hub: alice sees bob online as a m
 echo "/who" >&4
 expect "$W/hb.out" "@alice (owner, online)" 10 "hub: bob sees alice online as the owner"
 if grep -q "127\.0\.0\.1" "$W/ha.out" "$W/hb.out"; then check no "hub: no address shown to either user"; else check ok "hub: no address shown to either user"; fi
+if [ "${SMOKE_VOICE:-0}" = 1 ]; then
+    echo "/vc" >&4
+    sleep 4
+    echo "/who" >&3
+    expect "$W/ha.out" "@bob (member, online, in voice)" 15 "voice: alice sees bob in the voice channel"
+    echo "/who" >&4
+    expect "$W/hb.out" "@bob (member, online, in voice)" 15 "voice: bob is still in the voice channel after several refreshes"
+    echo "/kick @bob" >&3
+    expect "$W/hb.out" "no longer a member" 30 "voice: bob is told he was removed"
+fi
 echo "/quit" >&4
 echo "/quit" >&3
 exec 3>&- 4>&-

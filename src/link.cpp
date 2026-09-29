@@ -401,7 +401,7 @@ void RelayLink::ctlLoop(){
                 continue;
             }
             if(now - lastPing[i] >= 25000){ sendControl(i, kPing, nullptr, 0); lastPing[i] = now; }
-            if(now - k.lastRecvMs.load() >= 75000){
+            if((int32_t)(now - k.lastRecvMs.load()) >= 75000){
                 linkDown(i);
                 for(int j = 0; j < kConns; j++) if(conns_[j].ready){ std::string pe; publish(j, pe); lastPublish[j] = now; }
                 continue;

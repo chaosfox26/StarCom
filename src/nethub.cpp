@@ -804,8 +804,17 @@ void NetHub::hubLoop(){
 }
 
 void NetHub::refreshVoice(HubCore& h){
+    bool stillIn = false;
+    {
+        std::lock_guard<std::mutex> g(voiceMu_);
+        if(!voiceOn_){ voicePeers_.clear(); return; }
+        for(const HubView& v : h.hubs()){
+            if(std::memcmp(v.id, voiceHub_, 32) != 0) continue;
+            for(const HubMemberView& m : v.members) if(std::memcmp(m.key, id_.pub, 32) == 0 && m.voiceChannel == voiceChan_) stillIn = true;
+        }
+    }
+    if(!stillIn){ voiceOff(h); return; }
     std::lock_guard<std::mutex> g(voiceMu_);
-    if(!voiceOn_){ voicePeers_.clear(); return; }
     std::vector<VoicePeer> next;
     voiceNames_.clear();
     for(const HubView& v : h.hubs()){
@@ -1092,7 +1101,7 @@ void NetHub::applyHubSnapshot(){
                 l.text = safeText(e.text);
                 l.time = clockNow();
                 cl.lines.push_back(l);
-                if(cl.lines.size() > 5000) cl.lines.erase(cl.lines.begin(), cl.lines.begin() + 1000);
+                if(cl.lines.size() > 5000){ cl.lines.erase(cl.lines.begin(), cl.lines.begin() + 1000); cl.trimmed += 1000; }
                 if(!mine){ cl.unread++; hs.unread++; }
             }
         }

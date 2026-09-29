@@ -115,9 +115,9 @@ int runHubConsole(){
             for(HubChannelLines& cl : h.chans){
                 std::string k = idOf(h.view.id) + std::string((const char*)&cl.channel, 8);
                 size_t& done = printed[k];
-                if(done > cl.lines.size()) done = 0;
-                for(; done < cl.lines.size(); done++){
-                    const ChatLine& l = cl.lines[done];
+                if(done < cl.trimmed) done = cl.trimmed;
+                for(; done < cl.trimmed + cl.lines.size(); done++){
+                    const ChatLine& l = cl.lines[done - cl.trimmed];
                     std::string where = idOf(h.view.id) == curHub && cl.channel == curCh ? std::string() : "[" + safeText(h.view.name) + " #" + channelName(h, cl.channel) + "] ";
                     consolePrint(where + (l.mine ? std::string("you") : "@" + l.who) + ": " + l.text + "\n");
                 }

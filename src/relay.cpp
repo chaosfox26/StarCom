@@ -12,6 +12,7 @@ namespace {
 const uint32_t kLinkSilentMs = 75000;
 const uint32_t kCircuitIdleMs = 120000;
 const uint32_t kPeerPingMs = 25000;
+const size_t kMaxJobsPerConn = 4;
 const size_t kMaxConns = 2000;
 const size_t kMaxCircuitsPerConn = 64;
 const size_t kMaxQueued = 64;
@@ -306,6 +307,7 @@ void RelayServer::dropConn(uint64_t connId){
             auto lc = circs_.find(local);
             if(lc != circs_.end()){
                 circs_.erase(lc);
+                if(conns_.count(local.first) && conns_[local.first].circuitCount) conns_[local.first].circuitCount--;
                 End e;
                 e.conn = local.first;
                 e.circ = local.second;
@@ -652,6 +654,7 @@ void RelayServer::frame(uint64_t connId, const uint8_t* p, size_t n){
         return;
     }
     if(kind == kLinkPing){
+        if(c.dialed) return;
         uint8_t f[1] = { kLinkPing };
         sendFrame(connId, Lane::Signal, f, sizeof f);
         return;
@@ -743,7 +746,7 @@ void RelayServer::frame(uint64_t connId, const uint8_t* p, size_t n){
         j.pinned = false;
         {
             std::lock_guard<std::mutex> g(jobMu_);
-            if(jobs_.size() < 256) jobs_.push_back(j);
+            if(jobs_.size() < 256 && std::count_if(jobs_.begin(), jobs_.end(), [connId](const Job& q){ return q.conn == connId; }) < (long)kMaxJobsPerConn) jobs_.push_back(j);
         }
         jobCv_.notify_one();
         return;
@@ -762,7 +765,7 @@ void RelayServer::frame(uint64_t connId, const uint8_t* p, size_t n){
         j.pinned = acc != 0;
         {
             std::lock_guard<std::mutex> g(jobMu_);
-            if(jobs_.size() < 256) jobs_.push_back(j);
+            if(jobs_.size() < 256 && std::count_if(jobs_.begin(), jobs_.end(), [connId](const Job& q){ return q.conn == connId; }) < (long)kMaxJobsPerConn) jobs_.push_back(j);
         }
         jobCv_.notify_one();
         return;
