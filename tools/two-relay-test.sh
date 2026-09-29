@@ -58,5 +58,14 @@ after="$(udp)"
 moved=$((after - before))
 if [ "$moved" -lt 1000 ]; then check ok "two relays: an idle relay link stays quiet ($moved datagrams in 10 seconds)"; else check no "two relays: an idle relay link stays quiet ($moved datagrams in 10 seconds, expected under 1000)"; fi
 
+taken=0
+for i in 1 2 3 4 5 6; do
+    mkdir -p "$W/u$i"
+    STARCOM_HOME="$W/u$i" "$BIN" name "user$i" > /dev/null
+    (sleep 9; echo "/quit") | STARCOM_HOME="$W/u$i" timeout 20 "$BIN" hub > "$W/u$i.out" 2>&1
+    if grep -q "already taken" "$W/u$i.out"; then taken=$((taken + 1)); fi
+done
+if [ "$taken" -eq 0 ]; then check ok "two relays: nobody is wrongly told their @name is taken (6 new users)"; else check no "two relays: $taken of 6 new users were wrongly told their @name is taken"; fi
+
 echo "$CHECKS checks, $FAILS failed"
 [ "$FAILS" -eq 0 ]

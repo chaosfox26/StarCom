@@ -94,6 +94,7 @@ private:
         uint64_t conn;
         bool publish;
         bool ok;
+        bool taken = false;
         std::vector<uint8_t> record;
     };
     struct Rate {

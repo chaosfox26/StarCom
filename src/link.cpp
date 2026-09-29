@@ -25,6 +25,16 @@ uint64_t wallMsNow(){
     return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+uint64_t nextSeq(){
+    static std::atomic<uint64_t> last{0};
+    uint64_t now = wallMsNow();
+    uint64_t prev = last.load();
+    for(;;){
+        uint64_t want = now > prev ? now : prev + 1;
+        if(last.compare_exchange_weak(prev, want)) return want;
+    }
+}
+
 long long msSince(Clock::time_point t){
     return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - t).count();
 }
@@ -188,7 +198,16 @@ void RelayLink::dispatch(int ci, const uint8_t* p, size_t n){
         if(n >= 2 && p[1] == 0){
             nameTaken_ = true;
             setNote("The @name @" + name_ + " is already taken by someone else. Choose another one.");
+        } else if(n >= 2 && p[1] == 2){
+            if(++publishFails_ >= 4){
+                nameTaken_ = true;
+                setNote("Could not publish the @name @" + name_ + " after several tries: it may be taken, or the network may be unreachable. Choose another one or check your connection.");
+            } else {
+                setNote("Could not reach the @name directory just now; trying again in a few seconds.");
+                republishDue_ = (nowMs() + 10000) | 1;
+            }
         } else if(n >= 2){
+            publishFails_ = 0;
             nameTaken_ = false;
             setNote("Online as @" + name_ + ". Your IP address stays hidden.");
         }
@@ -265,7 +284,7 @@ bool RelayLink::publish(int ci, std::string& err){
     PointerRecord r;
     std::memcpy(r.owner, id_.pub, 32);
     r.name = name_;
-    r.seq = wallMsNow();
+    r.seq = nextSeq();
     r.expires = wallSeconds() + kPointerMaxLifeSec;
     r.relay = k.relay;
     std::memcpy(r.relayPub, k.relayPub, 32);
@@ -379,6 +398,9 @@ void RelayLink::ctlLoop(){
     uint32_t lastPing[kConns] = { 0, 0 }, lastPublish[kConns] = { 0, 0 };
     int shownMask = -1;
     while(!quit_){
+        uint32_t due = republishDue_.load();
+        bool retryPublish = due != 0 && (int32_t)(nowMs() - due) >= 0;
+        if(retryPublish) republishDue_ = 0;
         for(int i = 0; i < kConns && !quit_; i++){
             Conn& k = conns_[i];
             if(!k.used) continue;
@@ -406,7 +428,7 @@ void RelayLink::ctlLoop(){
                 for(int j = 0; j < kConns; j++) if(conns_[j].ready){ std::string pe; publish(j, pe); lastPublish[j] = now; }
                 continue;
             }
-            if(now - lastPublish[i] >= 1800000){ std::string pe; publish(i, pe); lastPublish[i] = now; }
+            if(retryPublish || now - lastPublish[i] >= 1800000){ std::string pe; publish(i, pe); lastPublish[i] = now; }
         }
         bool any = false;
         int mask = 0;

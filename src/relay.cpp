@@ -908,7 +908,7 @@ void RelayServer::tick(){
     for(const Done& d : results){
         if(!conns_.count(d.conn)) continue;
         if(d.publish){
-            uint8_t f[2] = { kLinkPublished, (uint8_t)(d.ok ? 1 : 0) };
+            uint8_t f[2] = { kLinkPublished, (uint8_t)(d.ok ? 1 : d.taken ? 0 : 2) };
             sendFrame(d.conn, Lane::Signal, f, sizeof f);
         } else {
             std::vector<uint8_t> f(2 + (d.ok ? d.record.size() : 0));
@@ -950,6 +950,7 @@ void RelayServer::workerLoop(){
         if(started){
             if(j.publish){
                 d.ok = dns.publishRecord(j.record.data(), j.record.size(), err);
+                d.taken = !d.ok && err.find("already taken") != std::string::npos;
             } else {
                 PointerRecord r;
                 d.ok = dns.lookup(j.name, j.pinned ? j.pin : nullptr, r, err, &d.record);

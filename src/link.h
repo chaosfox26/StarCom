@@ -83,6 +83,8 @@ private:
     std::atomic<bool> ready_{false};
     std::atomic<bool> failed_{false};
     std::atomic<bool> nameTaken_{false};
+    std::atomic<uint32_t> republishDue_{0};
+    std::atomic<int> publishFails_{0};
     void setNote(const std::string& n);
     void rxLoop(int ci);
     void ctlLoop();

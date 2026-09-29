@@ -103,5 +103,13 @@ wait_for "$W/ha.out" "StarCom closed" 10 > /dev/null
 
 if [ "$(wc -l < "$W/relay.out")" -gt 1 ]; then check no "relay: wrote nothing after its start line"; else check ok "relay: wrote nothing after its start line"; fi
 
+mkdir -p "$W/c" "$W/d"
+STARCOM_HOME="$W/c" "$BIN" name twin > /dev/null
+STARCOM_HOME="$W/d" "$BIN" name twin > /dev/null
+(sleep 8; echo "/quit") | STARCOM_HOME="$W/c" timeout 20 "$BIN" hub > "$W/hc.out" 2>&1
+(sleep 8; echo "/quit") | STARCOM_HOME="$W/d" timeout 20 "$BIN" hub > "$W/hd.out" 2>&1
+if grep -q "already taken" "$W/hc.out"; then check no "names: the first owner of an @name is not told it is taken"; else check ok "names: the first owner of an @name is not told it is taken"; fi
+if grep -q "already taken" "$W/hd.out"; then check ok "names: a second person claiming the same @name is told it is taken"; else check no "names: a second person claiming the same @name is told it is taken"; fi
+
 echo "$CHECKS checks, $FAILS failed"
 [ "$FAILS" -eq 0 ]
