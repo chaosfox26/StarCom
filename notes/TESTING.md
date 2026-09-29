@@ -76,6 +76,7 @@ StarCom is built with AI, openly (see README.md). This early prototype does dire
 - `python tools/scrub-test.py build/starcom scrub` checks the picture scrubber (SCRUB.md).
 - `sh tools/smoke-test.sh build/starcom` starts a relay on the loopback address and runs two StarCom copies against it: a chat in both directions, then a hub (create, invite, join, messages both ways, roles), and checks that neither user is shown an address and that the relay writes nothing. It takes about 15 seconds and touches only a temporary folder that it deletes.
 - `SMOKE_VOICE=1 sh tools/smoke-test.sh build/starcom` also joins a hub voice channel and then removes the member from the hub. It is off by default because on a machine with a microphone it really opens the microphone for a few seconds.
+- `sh tools/two-relay-test.sh build/starcom` runs two relays and two StarCom copies, checks that a chat works across the two relays, then closes the chat and checks that the idle link between the relays stays quiet (it takes about a minute). It needs a binary built with two entry points: put `127.0.0.1:47000` and `127.0.0.1:47001` on separate lines in `.private/seeds.txt`.
 - The binary must have been built with the loopback address as its only entry point: put `127.0.0.1:47000` in `.private/seeds.txt` (the folder is never committed) and run `sh build.sh`. Use a separate checkout for this, so your normal build keeps its real entry points.
 
 On Linux, run `chmod +x starcom` once, then use `./starcom` in place of `starcom`.
