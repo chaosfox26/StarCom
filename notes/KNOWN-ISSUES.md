@@ -14,7 +14,7 @@
   - hub messages are not stored, so members who are offline miss them;
   - a voice channel and a direct call cannot run at the same time;
   - the owner cannot leave or hand over their own hub yet.
-- **No file sending yet.** The + in the message box says so. When it arrives, every file will pass through the metadata scrubber first (SPEC section 5).
+- **No file sending yet.** The + in the message box says so. The picture scrubber is finished (SCRUB.md, `starcom scrub`) and handles JPEG, PNG, GIF and WebP; when sending arrives, every file will pass through it first (SPEC section 5), and any other kind of file will be refused until a scrubber for it exists.
 - **The identity file is not encrypted yet** (see DATA.md).
 - **@names are first come, first served.** Nobody can take an @name while its owner's record is live, and the friends list remembers each friend's key, so nobody can pretend to be a friend you already have. When adding someone new, compare their friend code with them if you want to be sure.
 - **A brief console flash.** Double-clicking starcom.exe briefly flashes a console window before the StarCom window opens, because the same file also runs the command-line tools.

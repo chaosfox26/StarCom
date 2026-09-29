@@ -18,6 +18,7 @@
 #include "voicecall.h"
 #include "rendezvous.h"
 #include "platform_net.h"
+#include "scrub.h"
 #include "seed.h"
 #include <atomic>
 #include <chrono>
@@ -51,6 +52,7 @@ static int usage(){
         "  starcom id                 show your friend code\n"
         "  starcom probe              show your hardware video encoders\n"
         "  starcom seed               look up this copy's network entry points\n"
+        "  starcom scrub <file> <out> remove EXIF, GPS, text and other hidden data from a JPEG, PNG, GIF or WebP picture\n"
         "  starcom relay <port>       run a StarCom relay + entry point (keeps nothing about users, no logs)\n");
     return 2;
 }
@@ -93,6 +95,39 @@ static int cmdSeed(){
     std::string err;
     if(!seedNodes(addrs, err) || addrs.empty()){ std::fprintf(stderr, "%s\n", err.empty() ? "this copy of StarCom has no network entry points" : err.c_str()); return 1; }
     std::printf("%zu network entry point(s) found for this copy of StarCom.\n", addrs.size());
+    return 0;
+}
+
+static int cmdScrub(const std::string& inPath, const std::string& outPath){
+    std::vector<uint8_t> data;
+    {
+        std::ifstream f(inPath, std::ios::binary);
+        if(!f){ std::fprintf(stderr, "cannot open %s\n", inPath.c_str()); return 1; }
+        f.seekg(0, std::ios::end);
+        std::streamoff size = f.tellg();
+        f.seekg(0, std::ios::beg);
+        if(size < 0 || (uint64_t)size > kMaxScrubBytes){ std::fprintf(stderr, "the file is larger than 64 MB\n"); return 1; }
+        data.resize((size_t)size);
+        f.read((char*)data.data(), (std::streamsize)data.size());
+        if((size_t)f.gcount() != data.size()){ std::fprintf(stderr, "cannot read %s\n", inPath.c_str()); return 1; }
+    }
+    std::vector<uint8_t> clean;
+    ScrubReport rep;
+    std::string err;
+    if(!scrubFile(data, clean, rep, err)){ std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    FILE* o = std::fopen(outPath.c_str(), "wbx");
+    if(!o){ std::fprintf(stderr, "cannot create %s (it must not exist yet)\n", outPath.c_str()); return 1; }
+    bool ok = std::fwrite(clean.data(), 1, clean.size(), o) == clean.size();
+    ok = (std::fclose(o) == 0) && ok;
+    if(!ok){ std::fprintf(stderr, "cannot write %s\n", outPath.c_str()); return 1; }
+    std::printf("%s picture cleaned: %zu bytes became %zu bytes\n", kindName(rep.kind), rep.inBytes, rep.outBytes);
+    if(rep.removed.empty()) std::printf("  nothing hidden was found\n");
+    else {
+        std::string list;
+        for(const std::string& r : rep.removed) list += (list.empty() ? "" : ", ") + r;
+        std::printf("  removed: %s\n", list.c_str());
+    }
+    if(rep.orientationKept) std::printf("  kept: which way up the picture is (rotation %d), nothing else from EXIF\n", rep.orientationKept);
     return 0;
 }
 
@@ -398,7 +433,8 @@ static int cmdChatName(const std::string& arg, bool voice){
 int main(int argc, char** argv){
     std::string dataErr;
     bool isServer = argc > 1 && std::string(argv[1]) == "relay";
-    bool dataOk = isServer ? true : enterDataDir(g_dataWhere, dataErr);
+    bool keepCwd = isServer || (argc > 1 && std::string(argv[1]) == "scrub");
+    bool dataOk = keepCwd ? true : enterDataDir(g_dataWhere, dataErr);
 #ifdef _WIN32
     if(argc < 2 || std::string(argv[1]) == "gui"){
         DWORD procs[4];
@@ -420,6 +456,7 @@ int main(int argc, char** argv){
     if(cmd == "id") rc = cmdId();
     else if(cmd == "probe") rc = cmdProbe();
     else if(cmd == "seed") rc = cmdSeed();
+    else if(cmd == "scrub" && argc > 3) rc = cmdScrub(argv[2], argv[3]);
     else if(cmd == "name" && argc > 2) rc = cmdName(argv[2]);
     else if(cmd == "chat" && argc > 2) rc = cmdChatName(argv[2], false);
     else if(cmd == "call" && argc > 2) rc = cmdChatName(argv[2], true);

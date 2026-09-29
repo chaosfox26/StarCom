@@ -53,6 +53,9 @@ Your secret key never leaves your device.
 - Packets carry a sequence number and a timestamp (inside the encryption) so the other side can play them in order.
 - **Hub voice channels** work the same way: your microphone opens only while you are in a voice channel, and your voice goes to each other person in that channel inside your end-to-end session with them. Nothing is recorded.
 
+## Picture scrubber
+- `starcom scrub <file> <out>` reads the one file you name and writes the one new file you name. It stores nothing else, sends nothing, and never changes the original. See SCRUB.md.
+
 ## The StarCom window
 - While StarCom is open, your identity key stays in memory: it proves your link to your relay and signs your @name record. It is wiped from memory when StarCom closes.
 - Chat messages shown in the window exist only in memory and are gone when you close it.

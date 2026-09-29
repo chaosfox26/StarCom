@@ -67,6 +67,11 @@ StarCom is built with AI, openly (see README.md). This early prototype does dire
 - Owner and admins: `/kick @name`, `/ban @name`. Owner only: `/admin @name`, `/unadmin @name`, `/addch name` (add ` voice` for a voice channel), `/bans` to list bans and `/unban <number>` to lift one.
 - `/leave` leaves the current hub; `/quit` closes StarCom. `/help` lists everything.
 
+## Cleaning a picture (Windows and Linux)
+- `starcom scrub photo.jpg clean.jpg` writes a copy of a JPEG, PNG, GIF or WebP picture without its EXIF, GPS, text and other hidden data, and lists what it removed. The original is not changed, and the new file must not exist yet.
+- Any other kind of file is refused. Details are in SCRUB.md.
+- Developers can check it with `python tools/scrub-test.py build/starcom scrub`.
+
 On Linux, run `chmod +x starcom` once, then use `./starcom` in place of `starcom`.
 
 ## Who sees what
