@@ -72,6 +72,11 @@ StarCom is built with AI, openly (see README.md). This early prototype does dire
 - Any other kind of file is refused. Details are in SCRUB.md.
 - Developers can check it with `python tools/scrub-test.py build/starcom scrub`.
 
+## Developer checks (Linux)
+- `python tools/scrub-test.py build/starcom scrub` checks the picture scrubber (SCRUB.md).
+- `sh tools/smoke-test.sh build/starcom` starts a relay on the loopback address and runs two StarCom copies against it: a chat in both directions, then a hub (create, invite, join, messages both ways, roles), and checks that neither user is shown an address and that the relay writes nothing. It takes about 15 seconds and touches only a temporary folder that it deletes.
+- The binary must have been built with the loopback address as its only entry point: put `127.0.0.1:47000` in `.private/seeds.txt` (the folder is never committed) and run `sh build.sh`. Use a separate checkout for this, so your normal build keeps its real entry points.
+
 On Linux, run `chmod +x starcom` once, then use `./starcom` in place of `starcom`.
 
 ## Who sees what
