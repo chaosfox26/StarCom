@@ -202,6 +202,7 @@ private:
     std::string requestNote_;
     std::thread checker_;
     std::atomic<bool> checkerBusy_{false};
+    std::atomic<bool> hasRequests_{false};
 
     std::thread hubThread_;
     std::mutex hubMu_;

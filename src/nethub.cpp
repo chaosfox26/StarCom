@@ -646,7 +646,7 @@ void NetHub::acceptLoop(){
             if(quit_) break;
             if(!inQ_.empty()){ c = inQ_.front(); inQ_.pop_front(); }
         }
-        if(tickMs() - lastTick >= 5000){ lastTick = tickMs(); post(std::string(), kTick, "", 0); }
+        if(tickMs() - lastTick >= 5000){ lastTick = tickMs(); if(hasRequests_) post(std::string(), kTick, "", 0); }
         if(!c) continue;
         auto a = std::make_shared<Adopt>();
         a->ch.reset(new UdpSocket());
@@ -1295,6 +1295,7 @@ bool NetHub::pump(){
         default: break;
         }
     }
+    hasRequests_ = !requests_.empty();
     reap();
     return changed;
 }
