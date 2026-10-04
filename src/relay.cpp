@@ -13,6 +13,7 @@ const uint32_t kLinkSilentMs = 75000;
 const uint32_t kCircuitIdleMs = 120000;
 const uint32_t kPeerPingMs = 25000;
 const size_t kMaxJobsPerConn = 4;
+const size_t kMaxBridgeOpens = 2048;
 const size_t kMaxConns = 2000;
 const size_t kMaxCircuitsPerConn = 64;
 const size_t kMaxQueued = 64;
@@ -461,6 +462,7 @@ bool RelayServer::tryBridge(uint64_t connId, uint64_t circ, const Addr& relay, c
     std::memcpy(pd.owner, owner, 32);
     pendingBridge_[{connId, circ}] = pd;
     pendingByBridge_[{v, circIn}] = { connId, circ };
+    if(bridgeOpens_.size() >= kMaxBridgeOpens) bridgeOpens_.pop_front();
     bridgeOpens_.push_back({ now, v });
     f[0] = kLinkBridgeOpen;
     putU64(f + 1, circIn);
