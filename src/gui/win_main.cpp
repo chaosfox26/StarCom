@@ -184,6 +184,7 @@ public:
 };
 
 App* g_app = nullptr;
+std::atomic<HWND> g_wakeTarget{nullptr};
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp){
     App* a = g_app;
@@ -265,6 +266,7 @@ int runGui(){
     App app;
     g_app = &app;
     if(!app.canvas.init()){ MessageBoxW(nullptr, L"Drawing could not start (Direct2D).", L"StarCom", MB_ICONERROR); return 1; }
+    app.hub.wake = []{ HWND t = g_wakeTarget.load(); if(t) PostMessageW(t, WM_NETWAKE, 0, 0); };
     std::string err;
     if(!app.hub.start(err)){ MessageBoxW(nullptr, widen(err).c_str(), L"StarCom", MB_ICONERROR); return 1; }
     WNDCLASSEXW wc = { sizeof(wc) };
@@ -282,12 +284,12 @@ int runGui(){
     if(dwm){ DwmSet f = (DwmSet)GetProcAddress(dwm, "DwmSetWindowAttribute"); if(f) f(app.hwnd, 20, &dark, sizeof dark); }
     StarUI ui(app, app.hub);
     app.ui = &ui;
-    HWND target = app.hwnd;
-    app.hub.wake = [target]{ PostMessageW(target, WM_NETWAKE, 0, 0); };
+    g_wakeTarget = app.hwnd;
     ShowWindow(app.hwnd, show);
     UpdateWindow(app.hwnd);
     MSG m;
     while(GetMessageW(&m, nullptr, 0, 0) > 0){ TranslateMessage(&m); DispatchMessageW(&m); }
+    g_wakeTarget = nullptr;
     app.hub.shutdown();
     app.ui = nullptr;
     app.canvas.shutdown();
