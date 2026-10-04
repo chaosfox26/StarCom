@@ -17,7 +17,7 @@ const size_t kKeyReqLen = 64;
 const size_t kEnvelope = 96;
 const size_t kMaxPairs = 64;
 const size_t kMaxRelays = 8;
-const uint32_t kRefusedRetryMs = 600000;
+const uint32_t kRefusedRetryMs = 100000;
 const uint32_t kRetryMs = 5000;
 
 uint32_t nowMs(){
