@@ -99,12 +99,12 @@ private:
     };
     UdpSocket& s_;
     bool clientOnly_;
-    uint8_t id_[32];
+    uint8_t id_[32] = {0};
     std::vector<DhtContact> buckets_[256];
     std::unordered_map<std::string, Stored> store_;
     std::unordered_map<std::string, Bucket> rate_;
-    uint8_t secret_[32];
-    uint8_t prevSecret_[32];
+    uint8_t secret_[32] = {0};
+    uint8_t prevSecret_[32] = {0};
     uint32_t secretAtMs_ = 0;
     uint32_t lastRefreshMs_ = 0;
     std::deque<Reply> replies_;
