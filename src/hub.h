@@ -14,6 +14,7 @@ constexpr size_t kMaxHubMembers = 100;
 constexpr size_t kMaxVoiceChannelPeople = 8;
 constexpr size_t kMaxHubText = 1100;
 constexpr size_t kMaxHubChannels = 24;
+constexpr size_t kMaxHubBans = 255;
 
 enum class ChannelKind : uint8_t { Text = 1, Voice = 2 };
 enum class HubRole : uint8_t { Member = 0, Admin = 1, Owner = 2 };

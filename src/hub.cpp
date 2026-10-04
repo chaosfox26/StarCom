@@ -601,7 +601,7 @@ struct HubCore::Impl {
             case kBan:
                 if(mod && (!tm || tr < sr) && r->target != h.man.owner){
                     h.eff.erase(r->target);
-                    h.bans.insert(r->target);
+                    if(h.bans.count(r->target) || h.bans.size() < kMaxHubBans) h.bans.insert(r->target);
                 }
                 break;
             case kUnban:
@@ -2000,10 +2000,11 @@ bool HubCore::manage(const uint8_t hub[32], ManageOp op, const ManageArgs& a, st
         if(target == p_->myKey){ err = "You cannot remove yourself that way; use Leave."; return false; }
         if(tm && tr >= mine){ err = "You cannot remove someone with the same or a higher role."; return false; }
         if(op == ManageOp::Kick && !tm){ err = "They are not in this hub."; return false; }
+        if(op == ManageOp::Ban && !h.bans.count(target) && h.bans.size() >= kMaxHubBans){ err = "The ban list is full (255 people). Unban someone first."; return false; }
         if(mine == HubRole::Owner){
             p_->ownerManifest(h, [&](Manifest& m){
                 m.members.erase(std::remove_if(m.members.begin(), m.members.end(), [&](const Member& x){ return x.key == target; }), m.members.end());
-                if(op == ManageOp::Ban && std::find(m.bans.begin(), m.bans.end(), target) == m.bans.end() && m.bans.size() < 255) m.bans.push_back(target);
+                if(op == ManageOp::Ban && std::find(m.bans.begin(), m.bans.end(), target) == m.bans.end() && m.bans.size() < kMaxHubBans) m.bans.push_back(target);
             });
         } else {
             p_->floodRecord(h, p_->signRecord(h.id, op == ManageOp::Kick ? kKick : kBan, target, std::string()));

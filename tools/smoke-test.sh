@@ -93,9 +93,11 @@ if [ "${SMOKE_VOICE:-0}" = 1 ]; then
     expect "$W/ha.out" "@bob (member, online, in voice)" 15 "voice: alice sees bob in the voice channel"
     echo "/who" >&4
     expect "$W/hb.out" "@bob (member, online, in voice)" 15 "voice: bob is still in the voice channel after several refreshes"
-    echo "/kick @bob" >&3
-    expect "$W/hb.out" "no longer a member" 30 "voice: bob is told he was removed"
 fi
+echo "/ban @bob" >&3
+expect "$W/hb.out" "no longer a member" 30 "hub: bob is told he was removed"
+echo "/join $CODE" >&4
+expect "$W/hb.out" "banned from that hub" 40 "hub: a banned member cannot join again with the same invite"
 echo "/quit" >&4
 echo "/quit" >&3
 exec 3>&- 4>&-
