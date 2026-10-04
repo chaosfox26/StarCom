@@ -927,7 +927,8 @@ void StarUI::drawHubSettings(Canvas& c, float w, float h){
             c.text(ch.kind == ChannelKind::Voice ? glyph(gSpeaker) : std::string("#"), rc(x + 8, y, 24, 34), ch.kind == ChannelKind::Voice ? Font::Glyph : Font::Bold, kMuted, Align::Center, false, true);
             c.text(ch.name, rc(x + 40, y, fw - 150, 34), Font::Body, kText, Align::Left, false, true);
             int act = A_RMCHAN + (int)i;
-            button(c, rc(x + fw - 100, y + 3, 92, 28), confirm_ == act ? "Sure?" : "Remove", kDark, confirm_ == act ? kMagenta : kText, act, "Remove this channel");
+            bool armed = confirm_ == act && confirmChan_ == ch.id;
+            button(c, rc(x + fw - 100, y + 3, 92, 28), armed ? "Sure?" : "Remove", kDark, armed ? kMagenta : kText, act, "Remove this channel");
             y += 38;
         }
         drawField(c, rc(x, y + 4, fw - 230, 40), chanName_, "new channel name", focus_ == FChanName, A_FCHAN);
@@ -951,9 +952,11 @@ void StarUI::drawHubSettings(Canvas& c, float w, float h){
         if(canMod){
             int ban = A_BAN + (int)i, kick = A_KICK + (int)i;
             bx -= 72;
-            button(c, rc(bx, y + 6, 72, 28), confirm_ == ban ? "Sure?" : "Ban", kDark, kMagenta, ban, "Remove them and stop them from coming back");
+            bool armedMember = std::memcmp(confirmKey_, m.key, 32) == 0;
+            bool banArmed = armedMember && confirm_ == ban, kickArmed = armedMember && confirm_ == kick;
+            button(c, rc(bx, y + 6, 72, 28), banArmed ? "Sure?" : "Ban", kDark, kMagenta, ban, "Remove them and stop them from coming back");
             bx -= 78;
-            button(c, rc(bx, y + 6, 72, 28), confirm_ == kick ? "Sure?" : "Kick", kDark, confirm_ == kick ? kMagenta : kText, kick, "Remove them (they can come back with a new invite)");
+            button(c, rc(bx, y + 6, 72, 28), kickArmed ? "Sure?" : "Kick", kDark, kickArmed ? kMagenta : kText, kick, "Remove them (they can come back with a new invite)");
         }
         if(owner && !self && m.role != HubRole::Owner){
             int role = A_ROLE + (int)i;

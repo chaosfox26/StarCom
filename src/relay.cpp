@@ -737,7 +737,7 @@ void RelayServer::frame(uint64_t connId, const uint8_t* p, size_t n){
         PointerRecord r;
         bool ok = openPointer(p + 1, n - 1, wallSeconds(), r) && crypto_verify32(r.owner, c.ses.peerPub) == 0 && (crypto_verify32(r.relayPub, me_.pub) == 0 || (r.relays == 2 && crypto_verify32(r.relayPub2, me_.pub) == 0));
         if(!ok){
-            uint8_t f[2] = { kLinkPublished, 0 };
+            uint8_t f[2] = { kLinkPublished, 3 };
             sendFrame(connId, Lane::Signal, f, sizeof f);
             return;
         }

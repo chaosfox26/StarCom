@@ -86,6 +86,12 @@ expect "$W/ha.out" "@bob (member, online)" 10 "hub: alice sees bob online as a m
 echo "/who" >&4
 expect "$W/hb.out" "@alice (owner, online)" 10 "hub: bob sees alice online as the owner"
 if grep -q "127\.0\.0\.1" "$W/ha.out" "$W/hb.out"; then check no "hub: no address shown to either user"; else check ok "hub: no address shown to either user"; fi
+echo "/leave" >&4
+sleep 4
+echo "/join $CODE" >&4
+sleep 15
+echo "after-rejoin-one" >&3
+expect "$W/hb.out" "@alice: after-rejoin-one" 20 "hub: messages are shown again after leaving and rejoining"
 if [ "${SMOKE_VOICE:-0}" = 1 ]; then
     echo "/vc" >&4
     sleep 4

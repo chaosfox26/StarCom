@@ -198,16 +198,25 @@ void RelayLink::dispatch(int ci, const uint8_t* p, size_t n){
         if(n >= 2 && p[1] == 0){
             nameTaken_ = true;
             setNote("The @name @" + name_ + " is already taken by someone else. Choose another one.");
+        } else if(n >= 2 && p[1] == 3){
+            published_[ci] = false;
+            setNote("Your @name record was rejected as invalid. Check that your computer's clock is correct.");
         } else if(n >= 2 && p[1] == 2){
-            if(++publishFails_ >= 4){
-                nameTaken_ = true;
-                setNote("Could not publish the @name @" + name_ + " after several tries: it may be taken, or the network may be unreachable. Choose another one or check your connection.");
+            published_[ci] = false;
+            bool other = false;
+            for(int j = 0; j < kConns; j++) if(published_[j]) other = true;
+            if(++publishFails_[ci] >= 4){
+                if(!other){
+                    nameTaken_ = true;
+                    setNote("Could not publish the @name @" + name_ + " after several tries: it may be taken, or the network may be unreachable. Choose another one or check your connection.");
+                }
             } else {
-                setNote("Could not reach the @name directory just now; trying again in a few seconds.");
-                republishDue_ = (nowMs() + 10000) | 1;
+                if(!other) setNote("Could not reach the @name directory just now; trying again in a few seconds.");
+                republishDue_[ci] = (nowMs() + 10000) | 1;
             }
         } else if(n >= 2){
-            publishFails_ = 0;
+            publishFails_[ci] = 0;
+            published_[ci] = true;
             nameTaken_ = false;
             setNote("Online as @" + name_ + ". Your IP address stays hidden.");
         }
@@ -366,6 +375,9 @@ void RelayLink::linkDown(int ci){
         sessionWipe(k.ses);
     }
     k.ready = false;
+    published_[ci] = false;
+    publishFails_[ci] = 0;
+    republishDue_[ci] = 0;
     dropCircuits(ci);
 }
 
@@ -398,9 +410,6 @@ void RelayLink::ctlLoop(){
     uint32_t lastPing[kConns] = { 0, 0 }, lastPublish[kConns] = { 0, 0 };
     int shownMask = -1;
     while(!quit_){
-        uint32_t due = republishDue_.load();
-        bool retryPublish = due != 0 && (int32_t)(nowMs() - due) >= 0;
-        if(retryPublish) republishDue_ = 0;
         for(int i = 0; i < kConns && !quit_; i++){
             Conn& k = conns_[i];
             if(!k.used) continue;
@@ -422,6 +431,9 @@ void RelayLink::ctlLoop(){
                 }
                 continue;
             }
+            uint32_t due = republishDue_[i].load();
+            bool retryPublish = due != 0 && (int32_t)(nowMs() - due) >= 0;
+            if(retryPublish) republishDue_[i].compare_exchange_strong(due, 0);
             if(now - lastPing[i] >= 25000){ sendControl(i, kPing, nullptr, 0); lastPing[i] = now; }
             if((int32_t)(now - k.lastRecvMs.load()) >= 75000){
                 linkDown(i);

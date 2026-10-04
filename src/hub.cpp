@@ -1715,7 +1715,9 @@ void HubCore::onFrame(const uint8_t peer[32], const uint8_t* p, size_t n){
         bool pending = false;
         for(const PendingJoin& j : p_->joins) if(j.inviter == from && j.sent) pending = true;
         if(!pending) return;
-        for(auto& other : p_->hubs) if(!other.second.joined) return;
+        size_t unjoined = 0;
+        for(auto& other : p_->hubs) if(!other.second.joined) unjoined++;
+        if(unjoined >= p_->joins.size()) return;
         Hub& h = p_->hubs[hubId];
         h.id = hubId;
         hit = p_->hubs.find(hubId);
