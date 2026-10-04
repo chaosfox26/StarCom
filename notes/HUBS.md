@@ -28,7 +28,8 @@ A hub is a group space (SPEC section 6: Hubs > Channels > Chat). It has text cha
 
 ## Limits (lightweight by design)
 - At most 100 members per hub, and at most 24 channels.
-- At most 8 people in one voice channel.
+- At most 8 people in one voice channel. Whatever other members claim, your StarCom sends voice to at most 7 others.
+- At most 255 banned people per hub. Banning when the list is full is refused until someone is unbanned.
 - A message holds up to 1,100 bytes. Each member can send 1 message per second, in bursts of up to 5, and every member enforces this.
 - Presence ("online", "in voice channel X") is sent when it changes and every 5 minutes.
 
@@ -37,7 +38,7 @@ A hub is a group space (SPEC section 6: Hubs > Channels > Chat). It has text cha
 - **A mesh, not a server.** Each member keeps encrypted connections to about 4 other members and passes hub messages along them. One of those links is swapped every 2 minutes, so the mesh repairs itself when people come and go. Neighbours also send each other a short version check (about 110 bytes) every 30 seconds, so a member who missed a change catches up.
 - **Dandelion++.** A new message first travels along a random path of members ("stem") before it spreads to everyone ("fluff"). This follows the Dandelion++ design (Fanti et al., 2018): paths are chosen per 10-minute period, and every stem member spreads a message itself if it has not seen it spread within a few seconds.
 - **Signed and encrypted.** Every message is encrypted with the channel's key and signed by its author. A member drops anything not signed by a current member, anything older than 10 minutes or seen before, and anything dated more than 60 seconds in the future.
-- **Keys that move forward.** Each channel key is replaced every hour by a one-way hash of itself, and the old key is wiped. A key taken later from a device cannot unlock earlier traffic. When someone is kicked or banned, the hub switches to brand-new keys that the removed person never receives. Only the owner or an admin can start new keys: each new key carries their signature and a check value, so every member can verify it, and nobody else can slip in a key of their own. The owner or an admin also renews the keys about every 30 days, and whenever the person who made the current keys stops being an admin. Someone removed from a hub is sent the new layout once, so their StarCom knows and deletes the hub.
+- **Keys that move forward.** Each channel key is replaced every hour by a one-way hash of itself, and the old key is wiped. A key taken later from a device cannot unlock earlier traffic. When someone is kicked or banned, the hub switches to brand-new keys that the removed person never receives. Only the owner or an admin can start new keys: each new key carries their signature and a check value, so every member can verify it, and nobody else can slip in a key of their own. The owner or an admin also renews the keys about every 30 days, and whenever the person who made the current keys stops being an admin. A key set dated more than 2 hours ahead of your clock is refused. Someone removed from a hub is sent the new layout once, so their StarCom knows and deletes the hub.
 - **Invites.** The code holds the inviter's public key, a random token and the inviter's @name. Your StarCom finds the inviter by that @name, but only accepts the answer if it carries the same key as the code. So if someone else ever holds that @name, the token is never shown to them.
 - **Names are checked.** A member's name in a hub is their @name, checked against their key in Star DNS before they are admitted. Nobody can join a hub under someone else's @name.
 
@@ -54,6 +55,10 @@ See DATA.md: the hub's signed layout, the signed kick, ban and join records, the
 - **If a member changes their @name,** the others cannot reach them by the old name until they join again with a new invite.
 - **The inviter must be online** while someone joins. Later, any online admin will be able to accept.
 - **The owner cannot leave or hand over their hub yet.**
+- **A kicked member can join again** with an invite that is still valid (a kick is not a ban). Ban to keep someone out.
+- **Admitted names are taken on trust.** Other members accept the admitting admin's word for a new member's @name, so a dishonest admin could admit someone under another person's name.
+- **A dishonest admin can use up the key generations.** After that, kicking and banning no longer change the keys, and the owner needs to make a new hub.
+- **Admin actions wait for the owner.** Each admin can have at most 32 kicks, bans and admissions waiting for the owner to fold them in (512 per hub). Beyond that the oldest is lost, so an admin who admits a 33rd person while the owner is away silently drops the first.
 - **Keys need an owner or admin now and then.** If no owner or admin opens StarCom for about 45 days, members cannot post until one of them does.
 - **A voice channel and a direct call are not possible at the same time.** StarCom asks you to leave one first.
 - **Direct messages from hub members.** A member who is not your friend can message you: it appears under MESSAGE REQUESTS as "in a hub with you". Accept adds them as a friend and opens the chat.
