@@ -179,7 +179,7 @@ public:
         canvas.rt->SetTransform(D2D1::Matrix3x2F::Identity());
         ui->paint(canvas, sz.width, sz.height);
         while(canvas.clips > 0) canvas.unclip();
-        if(canvas.rt->EndDraw() == D2DERR_RECREATE_TARGET) canvas.dropTarget();
+        if(canvas.rt->EndDraw() == D2DERR_RECREATE_TARGET){ canvas.dropTarget(); redraw(); }
     }
 };
 

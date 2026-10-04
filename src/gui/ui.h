@@ -39,6 +39,8 @@ private:
     bool showMembers_ = false;
     bool flashOk_ = false;
     int confirm_ = 0;
+    uint8_t confirmKey_[32] = {0};
+    uint64_t confirmChan_ = 0;
     bool wantNewHub_ = false;
     std::vector<std::string> knownHubs_;
     std::vector<bool> callDismissed_;

@@ -1092,8 +1092,10 @@ size_t StarUI::capFor(Field f) const {
 void StarUI::charInput(uint32_t cp){
     std::string* s = focused();
     if(!s || cp < 0x20 || cp == 0x7F) return;
-    if(s->size() >= capFor(focus_)) return;
-    appendUtf8(*s, cp);
+    std::string encoded;
+    appendUtf8(encoded, cp);
+    if(s->size() + encoded.size() > capFor(focus_)) return;
+    s->append(encoded);
     if(focus_ == FAddCode){ hub_.clearFound(); addErr_.clear(); }
     if(focus_ == FMyName) nameErr_.clear();
     host_.redraw();
@@ -1166,7 +1168,11 @@ bool StarUI::actHub(int a){
         int kind = (a - A_KICK) / 100;
         size_t i = (size_t)((a - A_KICK) % 100);
         if(i >= v.members.size()) return true;
-        if(kind < 2 && confirm_ != a){ confirm_ = a; return true; }
+        if(kind < 2 && (confirm_ != a || std::memcmp(confirmKey_, v.members[i].key, 32) != 0)){
+            confirm_ = a;
+            std::memcpy(confirmKey_, v.members[i].key, 32);
+            return true;
+        }
         confirm_ = 0;
         ManageArgs m;
         std::memcpy(m.member, v.members[i].key, 32);
@@ -1191,7 +1197,7 @@ bool StarUI::actHub(int a){
     if(a >= A_RMCHAN && a < A_UNBAN){
         size_t i = (size_t)(a - A_RMCHAN);
         if(i >= v.channels.size()) return true;
-        if(confirm_ != a){ confirm_ = a; return true; }
+        if(confirm_ != a || confirmChan_ != v.channels[i].id){ confirm_ = a; confirmChan_ = v.channels[i].id; return true; }
         confirm_ = 0;
         ManageArgs m;
         m.channel = v.channels[i].id;
