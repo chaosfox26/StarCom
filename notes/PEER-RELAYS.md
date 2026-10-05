@@ -18,6 +18,15 @@ Points 2 and 3 pull against each other: a direct connection shows the friend you
 ## 2. Why a direct connection cannot hide your address
 The other side must send replies somewhere, and your packets carry where they came from. Forging the source address does not help: providers drop forged packets and replies would go to the forged address. So hiding an address needs something in the middle, and that is the whole reason for relays.
 
+### Ways to get close when you also want a direct connection
+The owner asked for a way to hide the address from a friend while still connecting directly. Nothing hides it from the machine that receives the packets, so these are the ways to make the address useless, unlinkable or not yours, strongest first:
+1. **A mutual friend as the middle hop.** The destination sees the friend's address, not yours. No servers and no strangers, but a mutual friend must be online and that friend sees your address.
+2. **Throwaway addresses.** A fresh IPv6 address per session, abandoned afterwards, so a leaked address cannot be used to attack you later. The friend still learns your provider and rough area. The operating system chooses the address; StarCom cannot change it without administrator rights.
+3. **Nobody else ever sees it.** Direct connections only with keys on your friends list; addresses exchanged inside the end-to-end encryption so no relay or directory learns them; your friend's StarCom never shows or stores your address. This stops every bad actor and every casual leak (screen sharing, logs, clipboard). Only a friend who deliberately captures packets can still see it.
+4. **One switch per friend** ("Hide my IP from this friend"): the only reliable way to hide from a particular friend.
+
+Ways 3 and 4 together are what gets built first.
+
 ## 3. The hidden path
 - **Relays are peers.** A StarCom that is reachable from the internet and has "Help the network" switched on can act as a relay. It is off by default, as today.
 - **Layers.** You build the path one hop at a time. Each hop gets its own encrypted session (Noise, as now), so each relay knows only the hop before it and the hop after it. Inside all of that, you and your friend keep the end-to-end session you already have, so no relay reads anything.
