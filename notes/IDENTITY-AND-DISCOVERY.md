@@ -58,6 +58,9 @@ Status: design draft. No code yet.
 - The friends list remembers each friend's key the first time you add them (you can compare friend codes then), so nobody can later take over a friend's @name in your list.
 
 ## 6. Connecting: always through relays (the owner's order; it overrides SPEC section 5's "Direct Path")
+
+Update: the owner has since decided that friends connect directly by default and that relays may be run by ordinary users. This section describes what the prototype does today; the plan is in PEER-RELAYS.md.
+
 - No two users ever connect directly, and no user ever receives another user's IP address, in any form, even encrypted.
 - Each user keeps one encrypted link (Noise IK, proven with their identity key) to a relay.
 - A conversation is a circuit: your relay, then your friend's relay (when it is a different one), then your friend.
