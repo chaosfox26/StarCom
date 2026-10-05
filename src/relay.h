@@ -21,7 +21,7 @@ enum LinkKind : uint8_t {
     kLinkPublish = 7, kLinkLookup = 8, kLinkResult = 9, kLinkPing = 10, kLinkForward = 11, kLinkPublished = 12,
     kLinkBridgeHello = 13, kLinkBridgeOpen = 14, kLinkBridgeIn = 15, kLinkBridgeAck = 16, kLinkBridgeWelcome = 17
 };
-enum LinkPlainOp : uint8_t { kKeyRequest = 1, kKeyReply = 2 };
+enum LinkPlainOp : uint8_t { kKeyRequest = 1, kKeyReply = 2, kWhoAmI = 3, kWhoAmIReply = 4 };
 constexpr size_t kKeyRequestLen = 64;
 constexpr size_t kEnvelopeLen = 96;
 constexpr uint8_t kOpenMasked = 1;

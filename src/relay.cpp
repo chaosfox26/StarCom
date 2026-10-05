@@ -786,6 +786,12 @@ bool RelayServer::handle(const uint8_t* pkt, size_t n, const Addr& from){
             std::memcpy(r + kHeaderLen + 1, me_.pub, 32);
             s_.sendTo(r, sizeof r, from);
         }
+        if(n >= kKeyRequestLen && pkt[kHeaderLen] == kWhoAmI && allow(from)){
+            uint8_t r[kHeaderLen + 1 + 19];
+            writeHeader(r, PacketType::Link, Lane::Signal);
+            r[kHeaderLen] = kWhoAmIReply;
+            if(encodeAddr(from, r + kHeaderLen + 1)) s_.sendTo(r, sizeof r, from);
+        }
         return true;
     }
     if(h.type == PacketType::Hello){

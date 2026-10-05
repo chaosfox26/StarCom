@@ -189,7 +189,29 @@ void UdpSocket::attach(UdpSocket& shared, std::shared_ptr<PacketQueue> inbox, st
     send_ = std::move(send);
 }
 
+void UdpSocket::setDirect(SendFn fn){
+    std::shared_ptr<SendFn> d = std::make_shared<SendFn>(std::move(fn));
+    std::lock_guard<std::mutex> g(directMu_);
+    direct_ = std::move(d);
+}
+
+void UdpSocket::clearDirect(){
+    std::lock_guard<std::mutex> g(directMu_);
+    direct_.reset();
+}
+
+int UdpSocket::sendRelay(const uint8_t* p, size_t n, const Addr& to){
+    if(send_) return send_(p, n, to);
+    return -1;
+}
+
 int UdpSocket::sendTo(const uint8_t* p, size_t n, const Addr& to){
+    std::shared_ptr<SendFn> d;
+    {
+        std::lock_guard<std::mutex> g(directMu_);
+        d = direct_;
+    }
+    if(d) return (*d)(p, n, to);
     if(send_) return send_(p, n, to);
     UdpSocket* par = parent_;
     if(par) return par->sendTo(p, n, to);
@@ -268,6 +290,7 @@ void UdpSocket::close(){
     parent_ = nullptr;
     inbox_.reset();
     send_ = nullptr;
+    clearDirect();
     if((sock_t)s_ != BAD_SOCK){ closeSock((sock_t)s_); s_ = (intptr_t)BAD_SOCK; }
 }
 

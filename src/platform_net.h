@@ -52,6 +52,11 @@ public:
     void unread(const uint8_t* p, size_t n, const Addr& from);
     void attach(UdpSocket& shared, std::shared_ptr<PacketQueue> inbox, std::function<int(const uint8_t*, size_t, const Addr&)> send = nullptr);
     bool isChannel() const { return parent_ != nullptr; }
+    using SendFn = std::function<int(const uint8_t*, size_t, const Addr&)>;
+    void setDirect(SendFn fn);
+    void clearDirect();
+    int sendRelay(const uint8_t* p, size_t n, const Addr& to);
+    std::shared_ptr<PacketQueue> inbox() const { return inbox_; }
 private:
     struct Held {
         std::vector<uint8_t> data;
@@ -62,6 +67,8 @@ private:
     UdpSocket* parent_ = nullptr;
     std::shared_ptr<PacketQueue> inbox_;
     std::function<int(const uint8_t*, size_t, const Addr&)> send_;
+    std::mutex directMu_;
+    std::shared_ptr<SendFn> direct_;
 };
 
 }

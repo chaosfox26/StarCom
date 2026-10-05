@@ -24,6 +24,7 @@ Every network connection StarCom makes is listed here: to whom, when, why, and w
 - **When you and your friend use the same relay** (today, while the network has one relay), that one relay sees both of your addresses. When the network has two or more entry relays, StarCom links to two of them and picks different relays for you and the other person, so that no single relay sees both ends.
 - **Star DNS nodes** see the address of the relay that stores or looks up a record, never yours.
 - **In a hub,** members know who wrote each message (messages are signed and names are shown), who is online, and who is in which voice channel. **They never learn anyone's IP address.** Relays and mesh neighbours cannot tell which member's connection a message started from: hub messages travel by Dandelion++ (see HUBS.md). Nobody outside a hub learns that it exists.
+- **Any relay will tell anyone who asks which address it sees them at.** The request is 64 bytes and the answer 28, so it cannot be used to amplify traffic, and it reveals nothing the asker does not already have. Nothing in StarCom asks for it yet; it is groundwork for direct connections between friends (PEER-RELAYS.md).
 - **Anyone watching your internet connection** sees encrypted packets going to your relay, and nothing else.
 
 StarCom makes no other connections: no update checks, no telemetry, no analytics.
