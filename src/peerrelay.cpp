@@ -10,6 +10,7 @@ namespace sc {
 namespace {
 
 const uint32_t kAnnounceEveryMs = 240000;
+const uint32_t kRetryEveryMs = 30000;
 const uint32_t kPingEveryMs = 25000;
 const uint32_t kSilentMs = 75000;
 const size_t kMaxEntryPoints = 8;
@@ -106,12 +107,12 @@ void RelayAnnouncer::linkLoop(Link& l){
             continue;
         }
         backoff = 2000;
-        uint32_t lastAnnounce = nowMs() - kAnnounceEveryMs;
+        uint32_t lastAnnounce = nowMs() - kAnnounceEveryMs - kRetryEveryMs;
         uint32_t lastPing = nowMs();
         uint32_t lastRecv = nowMs();
         while(!quit_){
             uint32_t now = nowMs();
-            if((int32_t)(now - lastAnnounce) >= (int32_t)kAnnounceEveryMs){
+            if((int32_t)(now - lastAnnounce) >= (int32_t)(l.listed ? kAnnounceEveryMs : kRetryEveryMs)){
                 uint8_t f[3] = { kLinkRelayAnnounce, (uint8_t)(port_ >> 8), (uint8_t)(port_ & 0xFF) };
                 sendFrame(l, ses, f, sizeof f);
                 lastAnnounce = now;

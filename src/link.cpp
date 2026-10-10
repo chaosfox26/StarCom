@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <memory>
 
 namespace sc {
 
@@ -36,6 +37,26 @@ uint64_t wallMsNow(){
 
 std::mutex g_cacheMu;
 
+bool plausibleRelay(const Addr& a){
+    uint8_t e[19];
+    if(!encodeAddr(a, e)) return false;
+    if(e[1] == 0 && e[2] == 0) return false;
+    if(e[0] == 4) return e[3] != 0 && e[3] < 224;
+    bool zero = true;
+    for(int i = 0; i < 16; i++) if(e[3 + i]) zero = false;
+    return !zero && e[3] != 0xFF;
+}
+
+bool numericHost(const std::string& h){
+    bool sep = false;
+    if(h.empty()) return false;
+    for(char c : h){
+        if(c == '.' || c == ':') sep = true;
+        else if(!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) return false;
+    }
+    return sep;
+}
+
 bool parseHostPort(const std::string& line, std::string& host, uint16_t& port){
     size_t colon = line.rfind(':');
     if(colon == std::string::npos || colon == 0 || colon + 1 >= line.size()) return false;
@@ -61,10 +82,10 @@ std::vector<Addr> loadRelayCache(){
         while(!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
         std::string host;
         uint16_t port = 0;
-        if(!parseHostPort(line, host, port)) continue;
+        if(!parseHostPort(line, host, port) || !numericHost(host)) continue;
         std::vector<Addr> a;
         std::string e;
-        if(resolve(host, port, a, e) && !a.empty()) out.push_back(a[0]);
+        if(resolve(host, port, a, e) && !a.empty() && plausibleRelay(a[0])) out.push_back(a[0]);
     }
     return out;
 }
@@ -75,6 +96,7 @@ void saveRelayCache(const std::vector<Addr>& v){
     {
         std::ofstream f(tmp, std::ios::trunc);
         for(const Addr& a : v) f << a.str() << '\n';
+        f.flush();
         if(!f) return;
     }
     replaceFile(tmp, kRelayCacheFile);
@@ -101,6 +123,48 @@ bool probeRelay(const Addr& a, uint8_t pub[32]){
         }
     }
     return false;
+}
+
+struct Probed {
+    Addr addr;
+    std::array<uint8_t, 32> pub;
+    bool alive = false;
+};
+
+void probeBatch(std::vector<Probed>& batch){
+    std::vector<std::unique_ptr<UdpSocket>> socks;
+    uint8_t req[kKeyReqLen] = {0};
+    writeHeader(req, PacketType::Link, Lane::Signal);
+    req[kHeaderLen] = kKeyReq;
+    for(Probed& p : batch){
+        std::unique_ptr<UdpSocket> s(new UdpSocket());
+        std::string err;
+        if(!s->open(p.addr.family(), 0, err)) s.reset();
+        socks.push_back(std::move(s));
+    }
+    uint32_t start = nowMs();
+    int sends = 0;
+    while((int32_t)(nowMs() - start) < 1200){
+        if(sends == 0 || (sends == 1 && (int32_t)(nowMs() - start) >= 500)){
+            for(size_t i = 0; i < batch.size(); i++) if(socks[i] && !batch[i].alive) socks[i]->sendTo(req, sizeof req, batch[i].addr);
+            sends++;
+        }
+        bool all = true;
+        for(size_t i = 0; i < batch.size(); i++){
+            if(!socks[i] || batch[i].alive) continue;
+            all = false;
+            uint8_t in[kMaxPacket];
+            Addr from;
+            int r = socks[i]->recvFrom(in, sizeof in, from, 10);
+            if(r >= (int)(kHeaderLen + 1 + 32) && from == batch[i].addr && in[kHeaderLen] == kKeyRep){
+                std::memcpy(batch[i].pub.data(), in + kHeaderLen + 1, 32);
+                bool zero = true;
+                for(uint8_t b : batch[i].pub) if(b) zero = false;
+                batch[i].alive = !zero;
+            }
+        }
+        if(all) break;
+    }
 }
 
 uint64_t nextSeq(){
@@ -240,7 +304,7 @@ bool RelayLink::sendFrame(int ci, Lane lane, const uint8_t* p, size_t n){
         if(!k.linked) return false;
         ok = sessionSeal(k.ses, lane, p, n, pkt, sizeof pkt, len);
     }
-    return ok && k.sock.sendTo(pkt, len, k.relay) == (int)len;
+    return ok && k.sock.sendTo(pkt, len, relayOf(ci)) == (int)len;
 }
 
 bool RelayLink::sendControl(int ci, uint8_t kind, const uint8_t* body, size_t n){
@@ -309,13 +373,16 @@ void RelayLink::dispatch(int ci, const uint8_t* p, size_t n){
         return;
     }
     if(kind == kRelayListReply){
+        if(!listWanted_[ci].exchange(false)) return;
+        if(std::find(seedList_.begin(), seedList_.end(), relayOf(ci)) == seedList_.end()) return;
         if(n < 2) return;
         size_t cnt = p[1];
         if(cnt > 8 || n < 2 + cnt * 51) return;
         std::vector<Addr> fresh;
         for(size_t i = 0; i < cnt; i++){
             Addr a;
-            if(decodeAddr(p + 2 + i * 51, a)) fresh.push_back(a);
+            if(!decodeAddr(p + 2 + i * 51, a) || !plausibleRelay(a)) continue;
+            if(std::find(fresh.begin(), fresh.end(), a) == fresh.end()) fresh.push_back(a);
         }
         std::vector<Addr> merged = fresh;
         for(const Addr& old : loadRelayCache()){
@@ -330,7 +397,7 @@ void RelayLink::dispatch(int ci, const uint8_t* p, size_t n){
     if(kind == kData){
         std::lock_guard<std::mutex> g(circMu_);
         auto it = circuits_.find(c);
-        if(it != circuits_.end() && it->second.ci == ci) it->second.q->push(p + 9, n - 9, conns_[ci].relay);
+        if(it != circuits_.end() && it->second.ci == ci) it->second.q->push(p + 9, n - 9, relayOf(ci));
         return;
     }
     if(kind == kClose){
@@ -363,7 +430,7 @@ void RelayLink::rxLoop(int ci){
     while(!quit_){
         Addr from;
         int r = k.sock.recvFrom(buf, sizeof buf, from, 200);
-        if(r <= 0 || !(from == k.relay)) continue;
+        if(r <= 0 || !(from == relayOf(ci))) continue;
         Header h;
         if(!readHeader(buf, (size_t)r, h)) continue;
         k.lastRecvMs = nowMs();
@@ -390,11 +457,11 @@ bool RelayLink::publish(int ci, std::string& err){
     r.name = name_;
     r.seq = nextSeq();
     r.expires = wallSeconds() + kPointerMaxLifeSec;
-    r.relay = k.relay;
+    r.relay = relayOf(ci);
     std::memcpy(r.relayPub, k.relayPub, 32);
     if(o.used && o.ready && !zero32(o.relayPub) && std::memcmp(o.relayPub, k.relayPub, 32) != 0){
         r.relays = 2;
-        r.relay2 = o.relay;
+        r.relay2 = relayOf(1 - ci);
         std::memcpy(r.relayPub2, o.relayPub, 32);
     }
     uint8_t rec[kMaxPointerLen + 64];
@@ -414,7 +481,7 @@ bool RelayLink::linkUp(int ci, std::string& err){
         req[kHeaderLen] = kKeyReq;
         bool havePub = false;
         for(int t = 0; t < 3 && !havePub && !quit_; t++){
-            k.sock.sendTo(req, sizeof req, k.relay);
+            k.sock.sendTo(req, sizeof req, relayOf(ci));
             uint8_t in[kMaxPacket];
             Addr from;
             int r = keyCh.recvFrom(in, sizeof in, from, 1000);
@@ -436,7 +503,7 @@ bool RelayLink::linkUp(int ci, std::string& err){
     }
     Session s;
     std::string caps, e;
-    if(!hsInitiate(k.hsCh, k.relay, id_, k.relayPub, "{}", s, caps, e, 8000)){ err = "the relay did not complete the encrypted link"; return false; }
+    if(!hsInitiate(k.hsCh, relayOf(ci), id_, k.relayPub, "{}", s, caps, e, 8000)){ err = "the relay did not complete the encrypted link"; return false; }
     {
         std::lock_guard<std::mutex> g(k.sessMu);
         k.ses = s;
@@ -462,6 +529,40 @@ bool RelayLink::linkUp(int ci, std::string& err){
     return true;
 }
 
+Addr RelayLink::relayOf(int ci) const {
+    std::lock_guard<std::mutex> g(relayMu_);
+    return conns_[ci].relay;
+}
+
+void RelayLink::setRelay(int ci, const Addr& a){
+    std::lock_guard<std::mutex> g(relayMu_);
+    conns_[ci].relay = a;
+}
+
+bool RelayLink::switchRelay(int ci, const std::vector<Addr>& seeds){
+    Conn& k = conns_[ci];
+    Addr current = relayOf(ci);
+    if(std::find(seeds.begin(), seeds.end(), current) != seeds.end()) return false;
+    std::vector<Addr> candidates = loadRelayCache();
+    for(const Addr& a : seeds) if(a.family() == familyV4()) candidates.push_back(a);
+    for(const Addr& a : candidates){
+        if(quit_) return false;
+        if(a.family() != current.family() || a == current) continue;
+        bool taken = false;
+        for(int j = 0; j < kConns; j++) if(j != ci && conns_[j].used && relayOf(j) == a) taken = true;
+        if(taken) continue;
+        uint8_t pub[32];
+        if(!probeRelay(a, pub)) continue;
+        bool same = false;
+        for(int j = 0; j < kConns; j++) if(j != ci && conns_[j].used && !zero32(conns_[j].relayPub) && std::memcmp(conns_[j].relayPub, pub, 32) == 0) same = true;
+        if(same) continue;
+        setRelay(ci, a);
+        std::memset(k.relayPub, 0, 32);
+        return true;
+    }
+    return false;
+}
+
 void RelayLink::linkDown(int ci){
     Conn& k = conns_[ci];
     {
@@ -484,18 +585,35 @@ void RelayLink::ctlLoop(){
         failed_ = true;
         return;
     }
+    seedList_ = seeds;
     std::vector<Addr> use;
     {
+        std::vector<Addr> cache = loadRelayCache();
+        std::vector<Addr> keep;
         std::vector<std::array<uint8_t, 32>> seen;
-        for(const Addr& a : loadRelayCache()){
-            if(use.size() >= (size_t)kConns) break;
-            if(std::find(seeds.begin(), seeds.end(), a) != seeds.end()) continue;
-            std::array<uint8_t, 32> pk;
-            if(!probeRelay(a, pk.data())) continue;
-            if(std::find(seen.begin(), seen.end(), pk) != seen.end()) continue;
-            seen.push_back(pk);
-            use.push_back(a);
+        size_t idx = 0;
+        while(idx < cache.size() && use.size() < (size_t)kConns && !quit_){
+            std::vector<Probed> batch;
+            for(; idx < cache.size() && batch.size() < 4; idx++){
+                if(std::find(seeds.begin(), seeds.end(), cache[idx]) != seeds.end()) continue;
+                Probed pr;
+                pr.addr = cache[idx];
+                pr.pub.fill(0);
+                batch.push_back(pr);
+            }
+            if(batch.empty()) break;
+            probeBatch(batch);
+            for(Probed& pr : batch){
+                if(!pr.alive) continue;
+                keep.push_back(pr.addr);
+                if(use.size() >= (size_t)kConns) continue;
+                if(std::find(seen.begin(), seen.end(), pr.pub) != seen.end()) continue;
+                seen.push_back(pr.pub);
+                use.push_back(pr.addr);
+            }
         }
+        for(; idx < cache.size(); idx++) keep.push_back(cache[idx]);
+        if(keep.size() != cache.size()) saveRelayCache(keep);
     }
     for(const Addr& a : seeds) if(a.family() == familyV4() && use.size() < (size_t)kConns && std::find(use.begin(), use.end(), a) == use.end()) use.push_back(a);
     if(use.empty()) use = seeds;
@@ -513,6 +631,7 @@ void RelayLink::ctlLoop(){
         k.rx = std::thread([this, i]{ rxLoop(i); });
     }
     int backoff[kConns] = { 1, 1 };
+    int linkFails[kConns] = { 0, 0 };
     uint32_t retryAt[kConns] = { 0, 0 };
     uint32_t lastPing[kConns] = { 0, 0 }, lastPublish[kConns] = { 0, 0 };
     int shownMask = -1;
@@ -524,17 +643,24 @@ void RelayLink::ctlLoop(){
             if(!k.linked){
                 if(retryAt[i] && (int32_t)(now - retryAt[i]) < 0) continue;
                 if(linkUp(i, err)){
+                    linkFails[i] = 0;
                     backoff[i] = 1;
                     retryAt[i] = 0;
                     lastPing[i] = lastPublish[i] = nowMs();
                     k.ready = true;
-                    sendControl(i, kRelayList, nullptr, 0);
+                    if(std::find(seeds.begin(), seeds.end(), relayOf(i)) != seeds.end()){ listWanted_[i] = true; sendControl(i, kRelayList, nullptr, 0); }
                     for(int j = 0; j < kConns; j++) if(conns_[j].ready){ std::string pe; publish(j, pe); lastPublish[j] = nowMs(); }
                 } else {
                     k.ready = false;
                     if(!k.used) continue;
                     retryAt[i] = nowMs() + (uint32_t)backoff[i] * 1000;
                     backoff[i] = backoff[i] * 2 > 30 ? 30 : backoff[i] * 2;
+                    if(++linkFails[i] >= 3 && switchRelay(i, seeds)){
+                        linkFails[i] = 0;
+                        backoff[i] = 1;
+                        retryAt[i] = 0;
+                        err.clear();
+                    }
                     if(i == 0 && !ready_) setNote("Cannot reach the StarCom network yet (" + err + "); retrying...");
                 }
                 continue;

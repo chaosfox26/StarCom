@@ -60,6 +60,8 @@ private:
         uint32_t bridgeWindowMs = 0;
         double goodKbps = 0;
         uint32_t bridgeIdleMs = 0;
+        Addr origin;
+        uint32_t lastListMs = 0;
     };
     struct End {
         uint64_t conn = 0;
@@ -131,12 +133,17 @@ private:
         Addr addr;
         uint8_t pub[32] = {0};
         uint32_t expiresMs = 0;
+        uint32_t checkedMs = 0;
+        std::string net;
     };
     struct Check {
         std::string pub;
+        std::string net;
         uint64_t conn = 0;
         uint32_t deadline = 0;
+        uint8_t nonce[8] = {0};
     };
+    std::unordered_map<std::string, std::pair<double, uint32_t>> announceRate_;
     std::map<std::string, Volunteer> volunteers_;
     std::map<std::string, Check> checks_;
     double checkTokens_ = 10;

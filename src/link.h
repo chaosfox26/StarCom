@@ -29,7 +29,7 @@ public:
     bool nameTaken() const { return nameTaken_; }
     std::string note() const;
     bool waitReady(int maxMs, const std::atomic<bool>* cancel);
-    Addr relay() const { return conns_[0].relay; }
+    Addr relay() const { return relayOf(0); }
     bool lookup(const std::string& name, const uint8_t* pin, PointerRecord& out, std::string& err);
     bool open(const PointerRecord& friendRec, UdpSocket& ch, std::string& err, bool masked = false);
     void accept(uint64_t circuit, UdpSocket& ch);
@@ -40,6 +40,10 @@ public:
 
 private:
     static constexpr int kConns = 2;
+    mutable std::mutex relayMu_;
+    Addr relayOf(int ci) const;
+    void setRelay(int ci, const Addr& a);
+    bool switchRelay(int ci, const std::vector<Addr>& seeds);
     struct Circuit {
         UdpSocket* ch;
         std::shared_ptr<PacketQueue> q;
@@ -86,6 +90,8 @@ private:
     std::atomic<uint32_t> republishDue_[kConns]{};
     std::atomic<int> publishFails_[kConns]{};
     std::atomic<bool> published_[kConns]{};
+    std::atomic<bool> listWanted_[kConns]{};
+    std::vector<Addr> seedList_;
     void setNote(const std::string& n);
     void rxLoop(int ci);
     void ctlLoop();

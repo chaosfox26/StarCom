@@ -15,7 +15,9 @@ const uint32_t kPeerPingMs = 25000;
 const size_t kMaxJobsPerConn = 4;
 const size_t kMaxBridgeOpens = 2048;
 const size_t kMaxVolunteers = 512;
-const size_t kMaxVolunteersPerIp = 4;
+const size_t kMaxVolunteersPerNet = 4;
+const uint32_t kRenewGapMs = 60000;
+const uint32_t kListGapMs = 60000;
 const size_t kMaxChecks = 64;
 const uint32_t kVolunteerLifeMs = 600000;
 const uint32_t kCheckWaitMs = 3000;
@@ -60,6 +62,28 @@ std::string addrKey(const Addr& a){
     uint8_t e[19];
     if(!encodeAddr(a, e)) return std::string();
     return std::string((const char*)e, 19);
+}
+
+std::string netKey(const Addr& a){
+    uint8_t e[19];
+    if(!encodeAddr(a, e)) return std::string();
+    if(e[0] == 4) return std::string((const char*)e, 1) + std::string((const char*)e + 3, 4);
+    return std::string((const char*)e, 1) + std::string((const char*)e + 3, 8);
+}
+
+bool plausibleAddr(const Addr& a){
+    uint8_t e[19];
+    if(!encodeAddr(a, e)) return false;
+    if(e[1] == 0 && e[2] == 0) return false;
+    if(e[0] == 4){
+        const uint8_t* b = e + 3;
+        if(b[0] == 0 || b[0] >= 224) return false;
+        return true;
+    }
+    const uint8_t* b = e + 3;
+    bool zero = true;
+    for(int i = 0; i < 16; i++) if(b[i]) zero = false;
+    return !zero && b[0] != 0xFF;
 }
 
 Lane laneOf(const uint8_t* payload, size_t n){
@@ -794,21 +818,32 @@ bool RelayServer::handle(const uint8_t* pkt, size_t n, const Addr& from){
     uint32_t now = nowMs();
     if(h.type == PacketType::Link){
         if(n >= kKeyRequestLen && pkt[kHeaderLen] == kKeyRequest && allow(from)){
-            uint8_t r[kHeaderLen + 1 + 32];
+            uint8_t r[kHeaderLen + 1 + 32 + 8];
             writeHeader(r, PacketType::Link, Lane::Signal);
             r[kHeaderLen] = kKeyReply;
             std::memcpy(r + kHeaderLen + 1, me_.pub, 32);
-            s_.sendTo(r, sizeof r, from);
+            size_t rl = kHeaderLen + 1 + 32;
+            bool hasNonce = false;
+            for(int i = 0; i < 8; i++) if(pkt[kHeaderLen + 1 + i]) hasNonce = true;
+            if(hasNonce){ std::memcpy(r + rl, pkt + kHeaderLen + 1, 8); rl += 8; }
+            s_.sendTo(r, rl, from);
         }
-        if(n >= kHeaderLen + 1 + 32 && pkt[kHeaderLen] == kKeyReply){
+        if(n >= kHeaderLen + 1 + 32 + 8 && pkt[kHeaderLen] == kKeyReply){
             auto ck = checks_.find(addrKey(from));
-            if(ck != checks_.end() && std::memcmp(ck->second.pub.data(), pkt + kHeaderLen + 1, 32) == 0){
-                Volunteer v;
-                v.addr = from;
-                std::memcpy(v.pub, pkt + kHeaderLen + 1, 32);
-                v.expiresMs = now + kVolunteerLifeMs;
-                volunteers_[ck->second.pub] = v;
-                uint8_t f[2] = { kLinkRelayAck, 1 };
+            if(ck != checks_.end() && std::memcmp(ck->second.pub.data(), pkt + kHeaderLen + 1, 32) == 0 && std::memcmp(ck->second.nonce, pkt + kHeaderLen + 1 + 32, 8) == 0){
+                size_t sameNet = 0;
+                for(auto& kv : volunteers_) if(kv.first != ck->second.pub && kv.second.net == ck->second.net) sameNet++;
+                uint8_t f[2] = { kLinkRelayAck, 0 };
+                if(sameNet < kMaxVolunteersPerNet){
+                    Volunteer v;
+                    v.addr = from;
+                    std::memcpy(v.pub, pkt + kHeaderLen + 1, 32);
+                    v.expiresMs = now + kVolunteerLifeMs;
+                    v.checkedMs = now;
+                    v.net = ck->second.net;
+                    volunteers_[ck->second.pub] = v;
+                    f[1] = 1;
+                }
                 if(conns_.count(ck->second.conn)) sendFrame(ck->second.conn, Lane::Signal, f, sizeof f);
                 checks_.erase(ck);
             }
@@ -838,6 +873,7 @@ bool RelayServer::handle(const uint8_t* pkt, size_t n, const Addr& from){
         ses.peer = from;
         Conn c;
         c.ses = ses;
+        c.origin = from;
         c.lastRecvMs = now;
         c.lastSendMs = now;
         uint64_t id = ses.id;
@@ -905,35 +941,54 @@ void RelayServer::announceRelay(uint64_t connId, const uint8_t* p, size_t n){
     uint16_t port = (uint16_t)((uint16_t)p[1] << 8 | p[2]);
     uint8_t no[2] = { kLinkRelayAck, 0 };
     std::string pub = keyStr(c.ses.peerPub);
-    std::string ip = ipKey(c.ses.peer);
-    if(port == 0 || ip.empty()){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
-    size_t sameIp = 0;
-    for(auto& kv : volunteers_) if(kv.first != pub && ipKey(kv.second.addr) == ip) sameIp++;
-    bool known = volunteers_.count(pub) != 0;
-    if(sameIp >= kMaxVolunteersPerIp || (!known && volunteers_.size() >= kMaxVolunteers) || checks_.size() >= kMaxChecks){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
+    std::string net = netKey(c.origin);
+    if(port == 0 || net.empty() || !plausibleAddr(c.origin)){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
     uint32_t now = nowMs();
-    checkTokens_ = std::min(10.0, checkTokens_ + (double)(now - lastCheckMs_) / 1000.0);
-    lastCheckMs_ = now;
-    if(checkTokens_ < 1){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
-    checkTokens_ -= 1;
-    Addr target = c.ses.peer;
+    auto known = volunteers_.find(pub);
+    if(known != volunteers_.end() && (int32_t)(now - known->second.checkedMs) < (int32_t)kRenewGapMs){
+        uint8_t yes[2] = { kLinkRelayAck, 1 };
+        sendFrame(connId, Lane::Signal, yes, sizeof yes);
+        return;
+    }
+    size_t sameNet = 0;
+    for(auto& kv : volunteers_) if(kv.first != pub && kv.second.net == net) sameNet++;
+    for(auto& kv : checks_) if(kv.second.pub != pub && kv.second.net == net) sameNet++;
+    if(sameNet >= kMaxVolunteersPerNet || (known == volunteers_.end() && volunteers_.size() >= kMaxVolunteers) || checks_.size() >= kMaxChecks){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
+    if(known == volunteers_.end()){
+        checkTokens_ = std::min(10.0, checkTokens_ + (double)(now - lastCheckMs_) / 1000.0);
+        lastCheckMs_ = now;
+        if(announceRate_.size() > kMaxRates) announceRate_.clear();
+        auto& nb = announceRate_[net];
+        if(nb.second) nb.first = std::min(3.0, nb.first + (double)(now - nb.second) / 10000.0); else nb.first = 3.0;
+        nb.second = now;
+        if(checkTokens_ < 1 || nb.first < 1){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
+        checkTokens_ -= 1;
+        nb.first -= 1;
+    }
+    Addr target = c.origin;
     addrSetPort(target, port);
     std::string key = addrKey(target);
     if(key.empty()){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
     Check ck;
     ck.pub = pub;
+    ck.net = net;
     ck.conn = connId;
     ck.deadline = now + kCheckWaitMs;
+    for(int i = 0; i < 8; i++) while(ck.nonce[i] == 0) sysRandom(&ck.nonce[i], 1);
     checks_[key] = ck;
     uint8_t req[kKeyRequestLen] = {0};
     writeHeader(req, PacketType::Link, Lane::Signal);
     req[kHeaderLen] = kKeyRequest;
+    std::memcpy(req + kHeaderLen + 1, ck.nonce, 8);
     s_.sendTo(req, sizeof req, target);
 }
 
 void RelayServer::listRelays(uint64_t connId){
     auto cit = conns_.find(connId);
     if(cit == conns_.end() || !cit->second.registered || cit->second.dialed) return;
+    uint32_t listNow = nowMs();
+    if(cit->second.lastListMs && (int32_t)(listNow - cit->second.lastListMs) < (int32_t)kListGapMs) return;
+    cit->second.lastListMs = listNow;
     std::vector<const Volunteer*> pool;
     for(auto& kv : volunteers_) pool.push_back(&kv.second);
     std::vector<uint8_t> f;

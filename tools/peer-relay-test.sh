@@ -119,5 +119,17 @@ echo "/quit" >&3
 echo "/quit" >&4
 exec 3>&- 4>&-
 
+for i in 3 4 5; do
+    mkdir -p "$W/v$i"
+    STARCOM_HOME="$W/v$i" timeout 600 "$BIN" volunteer relay 4701$((i - 1)) > "$W/v$i.out" 2>&1 &
+    PIDS="$PIDS $!"
+done
+sleep 75
+LISTED=0
+for i in 1 2 3 4 5; do
+    if tail -n 1 "$W/v$i.out" | grep -q "listed by 1 of 1 entry points$"; then LISTED=$((LISTED + 1)); fi
+done
+if [ "$LISTED" -eq 4 ]; then check ok "limit: at most 4 relays from one network are listed ($LISTED of 5 volunteers)"; else check no "limit: at most 4 relays from one network are listed ($LISTED of 5 volunteers, expected 4)"; fi
+
 echo "$CHECKS checks, $FAILS failed"
 [ "$FAILS" -eq 0 ]
