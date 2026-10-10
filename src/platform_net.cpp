@@ -21,6 +21,14 @@ static void closeSock(sock_t s){ closesocket(s); }
 #include <poll.h>
 #include <sys/random.h>
 #include <sys/socket.h>
+#ifdef __linux__
+#ifndef IPV6_ADDR_PREFERENCES
+#define IPV6_ADDR_PREFERENCES 72
+#endif
+#ifndef IPV6_PREFER_SRC_TMP
+#define IPV6_PREFER_SRC_TMP 0x0001
+#endif
+#endif
 #include <unistd.h>
 typedef int sock_t;
 static const sock_t BAD_SOCK = -1;
@@ -146,6 +154,10 @@ bool UdpSocket::open(int family, uint16_t port, std::string& err){
     if(family == AF_INET6){
         int off = 0;
         setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (const char*)&off, sizeof off);
+#ifdef __linux__
+        uint32_t prefer = IPV6_PREFER_SRC_TMP;
+        setsockopt(s, IPPROTO_IPV6, IPV6_ADDR_PREFERENCES, &prefer, sizeof prefer);
+#endif
         sockaddr_in6 a;
         std::memset(&a, 0, sizeof a);
         a.sin6_family = AF_INET6;

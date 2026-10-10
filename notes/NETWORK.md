@@ -29,6 +29,7 @@ Every network connection StarCom makes is listed here: to whom, when, why, and w
 - **Star DNS nodes** see the address of the relay that stores or looks up a record, never yours.
 - **In a hub,** members know who wrote each message (messages are signed and names are shown), who is online, and who is in which voice channel. **They never learn anyone's IP address.** Relays and mesh neighbours cannot tell which member's connection a message started from: hub messages travel by Dandelion++ (see HUBS.md). Nobody outside a hub learns that it exists.
 - **Any relay will tell anyone who asks which address it sees them at.** The request is 64 bytes and the answer 28, so it cannot be used to amplify traffic, and it reveals nothing the asker does not already have. Nothing in StarCom asks for it yet; it is groundwork for direct connections between friends (PEER-RELAYS.md).
+- **IPv6 source addresses.** On Linux, StarCom asks the operating system to use a temporary IPv6 address for its connections, so the address your relay sees is not your permanent one; Windows does this by default. It is a request to the operating system and could not be tested on a machine with IPv6 yet. The first part of the address still shows your provider and rough area.
 - **Anyone watching your internet connection** sees encrypted packets going to your relay, and nothing else.
 
 StarCom makes no other connections: no update checks, no telemetry, no analytics.
