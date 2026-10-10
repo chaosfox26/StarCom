@@ -1,6 +1,7 @@
 #include "rendezvous.h"
 #include "dht.h"
 #include "identity.h"
+#include "peerrelay.h"
 #include "platform_net.h"
 #include "relay.h"
 #include "seed.h"
@@ -12,7 +13,7 @@
 
 namespace sc {
 
-int runRelay(uint16_t port){
+int runRelay(uint16_t port, const char* keyFile, bool announce){
     UdpSocket s;
     std::string err;
     int fam = familyV6();
@@ -25,7 +26,7 @@ int runRelay(uint16_t port){
     }
     Identity relayId;
     bool created = false;
-    if(!identityLoadOrCreate("relay.key", relayId, created, err)){
+    if(!identityLoadOrCreate(keyFile, relayId, created, err)){
         std::fprintf(stderr, "%s\n", err.c_str());
         return 1;
     }
@@ -33,13 +34,16 @@ int runRelay(uint16_t port){
     std::string seedErr;
     if(!seedNodes(dhtSeeds, seedErr)) resolve("127.0.0.1", s.localPort(), dhtSeeds, seedErr);
     RelayServer relay(s, fam, relayId, dhtSeeds);
+    RelayAnnouncer announcer;
+    if(announce) announcer.start(relayId, s.localPort());
     identityWipe(relayId);
     DhtNode seedNode(s, false);
-    std::printf("StarCom relay and Star DNS seed on UDP port %u. Only this relay's own key (relay.key) is kept on disk; nothing about users is written or logged.\n", (unsigned)s.localPort());
+    std::printf("StarCom relay and Star DNS seed on UDP port %u. Only this relay's own key (%s) is kept on disk; nothing about users is written or logged.\n", (unsigned)s.localPort(), keyFile);
     std::fflush(stdout);
     uint8_t in[kMaxPacket + 64];
     auto lastRelayTick = std::chrono::steady_clock::now();
     auto lastSeedTick = lastRelayTick;
+    int lastListed = -1;
     for(;;){
         Addr from;
         int r = s.recvFrom(in, sizeof in, from, 200);
@@ -51,6 +55,11 @@ int runRelay(uint16_t port){
         if(now - lastSeedTick >= std::chrono::seconds(5)){
             lastSeedTick = now;
             seedNode.tick();
+        }
+        if(announce && announcer.listedBy() != lastListed){
+            lastListed = announcer.listedBy();
+            std::printf("* listed by %d of %d entry points%s\n", lastListed, announcer.entryPoints(), lastListed == 0 ? " (nobody can find this relay yet: check that the port is reachable from outside)" : "");
+            std::fflush(stdout);
         }
         if(r <= 0) continue;
         Header h;

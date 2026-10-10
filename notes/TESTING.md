@@ -31,6 +31,11 @@ StarCom is built with AI, openly (see README.md). This early prototype does dire
 - On the command line: `starcom volunteer on` or `off`; `starcom volunteer` shows the setting; `starcom volunteer run` helps right now and shows what it carries every 10 seconds (type `/quit` to stop).
 - A volunteer carries only other people's encrypted packets between StarCom's entry relays, up to 2 Mbps. Other users never learn a volunteer's IP address, and a volunteer never learns theirs.
 
+## Running a relay for others (optional, command line)
+- `starcom volunteer relay 47010` runs a relay on UDP port 47010 that other people can use. It tells you plainly that your IP address becomes public. It prints `listed by 1 of 1 entry points` once an entry relay has checked that the port answers from outside; `listed by 0` means nobody can find it yet (usually a closed port or a router that needs a port forward).
+- Its key is kept in `peer-relay.key`, separate from your identity.
+- StarCom copies that start afterwards learn about it from their relay, save it in `relays.txt` and use it the next time they start.
+
 ## Command line (Windows and Linux)
 - Choose your @name once:
 
@@ -76,6 +81,7 @@ StarCom is built with AI, openly (see README.md). This early prototype does dire
 - `python tools/scrub-test.py build/starcom scrub` checks the picture scrubber (SCRUB.md).
 - `sh tools/smoke-test.sh build/starcom` starts a relay on the loopback address and runs two StarCom copies against it: a chat in both directions, then a hub (create, invite, join, messages both ways, roles), and checks that neither user is shown an address, that a banned member is removed and cannot join again with the same invite, that a second person claiming an @name that is in use is told so (and the first owner is not), and that the relay writes nothing. It takes about 35 seconds and touches only a temporary folder that it deletes.
 - `SMOKE_VOICE=1 sh tools/smoke-test.sh build/starcom` also joins a hub voice channel before the member is banned. It is off by default because on a machine with a microphone it really opens the microphone for a few seconds.
+- `sh tools/peer-relay-test.sh build/starcom` starts an entry relay and two volunteer relays on the loopback address, checks that both are verified and listed, that two clients learn them in one run and use them in the next, and (when it may watch the loopback interface) that the traffic goes to the volunteers (about a minute and a half). Same single-entry-point binary as the smoke test.
 - `sh tools/admin-test.sh build/starcom` runs three StarCom copies against a loopback relay (an owner, an admin and a member) and checks that the owner can make an admin, that an admin cannot remove the owner, and that a member kicked by an admin is told and disappears from the owner's list (about a minute). Same single-entry-point binary as the smoke test.
 - `sh tools/two-relay-test.sh build/starcom` runs two relays and two StarCom copies, checks that a chat works across the two relays, then closes the chat and checks that the idle link between the relays stays quiet, and that six new users are never wrongly told their @name is taken (it takes about two minutes). It needs a binary built with two entry points: put `127.0.0.1:47000` and `127.0.0.1:47001` on separate lines in `.private/seeds.txt`.
 - `sh tools/bridge-restart-test.sh build/starcom` stops a volunteer and starts another straight away, and checks that the relay first refuses it and then accepts it again within 150 seconds (it takes about three minutes). Same single-entry-point binary as the smoke test.

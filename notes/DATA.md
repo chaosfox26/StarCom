@@ -15,6 +15,8 @@ StarCom collects nothing about its users. There are no accounts, no analytics an
 | Each hub's signed join, kick, ban, unban and leave records | `hubs/<hub id>.records` | Until the owner folds them into the layout, or you leave the hub | No: signed, not secret |
 | Each hub's channel keys, each with the signature of the owner or admin who made it | `hubs/<hub id>.keys` | Replaced every hour by a one-way hash (the old key is overwritten), replaced on every kick or ban and about every 30 days, deleted when you leave | **Not yet**, like `identity.key`: protected only by your operating system account. Keep the data folder private. |
 | The invites you made | `hubs/invites` | Until each invite expires or is used up | Only a hash of each invite's token is stored, never the token itself |
+| Volunteer relays you can use: up to 16 addresses (IP and port), most recently learned first | `relays.txt`, in the StarCom data folder | Until you delete it. It is replaced by newer lists from your relay. | No: addresses of public relays that their owners chose to publish |
+| The key of a relay you run with `starcom volunteer relay` | `peer-relay.key`, in the StarCom data folder | Until you delete it | **Not yet**, like `identity.key`. It is a different key from your identity, so it cannot be tied to your @name. |
 | Whether you help the network (on or off) | `volunteer.txt` | Until you change it | No: it holds only "on" or "off" |
 
 ## Sent over the network

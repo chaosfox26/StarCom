@@ -19,7 +19,8 @@ namespace sc {
 enum LinkKind : uint8_t {
     kLinkRegister = 1, kLinkRegistered = 2, kLinkOpen = 3, kLinkData = 4, kLinkIncoming = 5, kLinkClose = 6,
     kLinkPublish = 7, kLinkLookup = 8, kLinkResult = 9, kLinkPing = 10, kLinkForward = 11, kLinkPublished = 12,
-    kLinkBridgeHello = 13, kLinkBridgeOpen = 14, kLinkBridgeIn = 15, kLinkBridgeAck = 16, kLinkBridgeWelcome = 17
+    kLinkBridgeHello = 13, kLinkBridgeOpen = 14, kLinkBridgeIn = 15, kLinkBridgeAck = 16, kLinkBridgeWelcome = 17,
+    kLinkRelayAnnounce = 18, kLinkRelayAck = 19, kLinkRelayList = 20, kLinkRelayListReply = 21
 };
 enum LinkPlainOp : uint8_t { kKeyRequest = 1, kKeyReply = 2, kWhoAmI = 3, kWhoAmIReply = 4 };
 constexpr size_t kKeyRequestLen = 64;
@@ -126,6 +127,20 @@ private:
     std::unordered_map<std::string, uint32_t> avoid_;
     std::deque<std::pair<uint32_t, uint64_t>> bridgeOpens_;
     std::unordered_map<std::string, uint32_t> envSeen_;
+    struct Volunteer {
+        Addr addr;
+        uint8_t pub[32] = {0};
+        uint32_t expiresMs = 0;
+    };
+    struct Check {
+        std::string pub;
+        uint64_t conn = 0;
+        uint32_t deadline = 0;
+    };
+    std::map<std::string, Volunteer> volunteers_;
+    std::map<std::string, Check> checks_;
+    double checkTokens_ = 10;
+    uint32_t lastCheckMs_ = 0;
     uint8_t xSec_[32] = {0};
 
     std::vector<Addr> dhtSeeds_;
@@ -157,6 +172,9 @@ private:
     bool openEnvelope(const uint8_t env[kEnvelopeLen], uint8_t owner[32]);
     void bridgeFrame(uint64_t connId, const uint8_t* p, size_t n);
     void tickBridges(uint32_t now);
+    void announceRelay(uint64_t connId, const uint8_t* p, size_t n);
+    void listRelays(uint64_t connId);
+    void tickVolunteers(uint32_t now);
 };
 
 

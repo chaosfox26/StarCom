@@ -14,6 +14,12 @@ const uint32_t kCircuitIdleMs = 120000;
 const uint32_t kPeerPingMs = 25000;
 const size_t kMaxJobsPerConn = 4;
 const size_t kMaxBridgeOpens = 2048;
+const size_t kMaxVolunteers = 512;
+const size_t kMaxVolunteersPerIp = 4;
+const size_t kMaxChecks = 64;
+const uint32_t kVolunteerLifeMs = 600000;
+const uint32_t kCheckWaitMs = 3000;
+const size_t kRelayListMax = 8;
 const size_t kMaxConns = 2000;
 const size_t kMaxCircuitsPerConn = 64;
 const size_t kMaxQueued = 64;
@@ -48,6 +54,12 @@ std::string ipKey(const Addr& a){
     uint8_t e[19];
     if(!encodeAddr(a, e)) return std::string();
     return std::string((const char*)e, 1) + std::string((const char*)e + 3, 16);
+}
+
+std::string addrKey(const Addr& a){
+    uint8_t e[19];
+    if(!encodeAddr(a, e)) return std::string();
+    return std::string((const char*)e, 19);
 }
 
 Lane laneOf(const uint8_t* payload, size_t n){
@@ -639,6 +651,8 @@ void RelayServer::frame(uint64_t connId, const uint8_t* p, size_t n){
         if(!c.registered && !c.dialed) bridgeFrame(connId, p, n);
         return;
     }
+    if(kind == kLinkRelayAnnounce){ announceRelay(connId, p, n); return; }
+    if(kind == kLinkRelayList){ listRelays(connId); return; }
     if(kind == kLinkRegister){
         if(c.dialed) return;
         std::string owner = keyStr(c.ses.peerPub);
@@ -786,6 +800,20 @@ bool RelayServer::handle(const uint8_t* pkt, size_t n, const Addr& from){
             std::memcpy(r + kHeaderLen + 1, me_.pub, 32);
             s_.sendTo(r, sizeof r, from);
         }
+        if(n >= kHeaderLen + 1 + 32 && pkt[kHeaderLen] == kKeyReply){
+            auto ck = checks_.find(addrKey(from));
+            if(ck != checks_.end() && std::memcmp(ck->second.pub.data(), pkt + kHeaderLen + 1, 32) == 0){
+                Volunteer v;
+                v.addr = from;
+                std::memcpy(v.pub, pkt + kHeaderLen + 1, 32);
+                v.expiresMs = now + kVolunteerLifeMs;
+                volunteers_[ck->second.pub] = v;
+                uint8_t f[2] = { kLinkRelayAck, 1 };
+                if(conns_.count(ck->second.conn)) sendFrame(ck->second.conn, Lane::Signal, f, sizeof f);
+                checks_.erase(ck);
+            }
+            return true;
+        }
         if(n >= kKeyRequestLen && pkt[kHeaderLen] == kWhoAmI && allow(from)){
             uint8_t r[kHeaderLen + 1 + 19];
             writeHeader(r, PacketType::Link, Lane::Signal);
@@ -869,8 +897,79 @@ bool RelayServer::handle(const uint8_t* pkt, size_t n, const Addr& from){
     return false;
 }
 
+void RelayServer::announceRelay(uint64_t connId, const uint8_t* p, size_t n){
+    auto cit = conns_.find(connId);
+    if(cit == conns_.end()) return;
+    Conn& c = cit->second;
+    if(c.registered || c.dialed || c.bridge || n != 3) return;
+    uint16_t port = (uint16_t)((uint16_t)p[1] << 8 | p[2]);
+    uint8_t no[2] = { kLinkRelayAck, 0 };
+    std::string pub = keyStr(c.ses.peerPub);
+    std::string ip = ipKey(c.ses.peer);
+    if(port == 0 || ip.empty()){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
+    size_t sameIp = 0;
+    for(auto& kv : volunteers_) if(kv.first != pub && ipKey(kv.second.addr) == ip) sameIp++;
+    bool known = volunteers_.count(pub) != 0;
+    if(sameIp >= kMaxVolunteersPerIp || (!known && volunteers_.size() >= kMaxVolunteers) || checks_.size() >= kMaxChecks){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
+    uint32_t now = nowMs();
+    checkTokens_ = std::min(10.0, checkTokens_ + (double)(now - lastCheckMs_) / 1000.0);
+    lastCheckMs_ = now;
+    if(checkTokens_ < 1){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
+    checkTokens_ -= 1;
+    Addr target = c.ses.peer;
+    addrSetPort(target, port);
+    std::string key = addrKey(target);
+    if(key.empty()){ sendFrame(connId, Lane::Signal, no, sizeof no); return; }
+    Check ck;
+    ck.pub = pub;
+    ck.conn = connId;
+    ck.deadline = now + kCheckWaitMs;
+    checks_[key] = ck;
+    uint8_t req[kKeyRequestLen] = {0};
+    writeHeader(req, PacketType::Link, Lane::Signal);
+    req[kHeaderLen] = kKeyRequest;
+    s_.sendTo(req, sizeof req, target);
+}
+
+void RelayServer::listRelays(uint64_t connId){
+    auto cit = conns_.find(connId);
+    if(cit == conns_.end() || !cit->second.registered || cit->second.dialed) return;
+    std::vector<const Volunteer*> pool;
+    for(auto& kv : volunteers_) pool.push_back(&kv.second);
+    std::vector<uint8_t> f;
+    f.push_back(kLinkRelayListReply);
+    f.push_back(0);
+    size_t count = 0;
+    while(!pool.empty() && count < kRelayListMax){
+        size_t i = (size_t)(random64() % pool.size());
+        const Volunteer* v = pool[i];
+        pool.erase(pool.begin() + (long)i);
+        uint8_t e[19];
+        if(!encodeAddr(v->addr, e)) continue;
+        f.insert(f.end(), e, e + 19);
+        f.insert(f.end(), v->pub, v->pub + 32);
+        count++;
+    }
+    f[1] = (uint8_t)count;
+    sendFrame(connId, Lane::Signal, f.data(), f.size());
+}
+
+void RelayServer::tickVolunteers(uint32_t now){
+    for(auto it = volunteers_.begin(); it != volunteers_.end();){
+        if((int32_t)(now - it->second.expiresMs) >= 0) it = volunteers_.erase(it); else ++it;
+    }
+    for(auto it = checks_.begin(); it != checks_.end();){
+        if((int32_t)(now - it->second.deadline) >= 0){
+            uint8_t f[2] = { kLinkRelayAck, 0 };
+            if(conns_.count(it->second.conn)) sendFrame(it->second.conn, Lane::Signal, f, sizeof f);
+            it = checks_.erase(it);
+        } else ++it;
+    }
+}
+
 void RelayServer::tick(){
     uint32_t now = nowMs();
+    tickVolunteers(now);
     std::vector<uint64_t> dead;
     for(auto& kv : conns_){
         if((int32_t)(now - kv.second.lastRecvMs) > (int32_t)kLinkSilentMs) dead.push_back(kv.first);

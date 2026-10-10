@@ -1,9 +1,15 @@
 #include "link.h"
 #include "wire.h"
 #include "seed.h"
+#include "paths.h"
 #include "../third_party/monocypher/monocypher.h"
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 
 namespace sc {
 
@@ -14,6 +20,9 @@ using Clock = std::chrono::steady_clock;
 const uint8_t kRegister = 1, kRegistered = 2, kOpen = 3, kData = 4, kIncoming = 5, kClose = 6,
               kPublish = 7, kLookup = 8, kResult = 9, kPing = 10, kPublished = 12;
 const uint8_t kKeyReq = 1, kKeyRep = 2;
+const uint8_t kRelayList = 20, kRelayListReply = 21;
+const char* kRelayCacheFile = "relays.txt";
+const size_t kRelayCacheMax = 16;
 const uint8_t kOpenMasked = 1;
 const size_t kKeyReqLen = 64;
 
@@ -23,6 +32,75 @@ uint32_t nowMs(){
 
 uint64_t wallMsNow(){
     return (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::mutex g_cacheMu;
+
+bool parseHostPort(const std::string& line, std::string& host, uint16_t& port){
+    size_t colon = line.rfind(':');
+    if(colon == std::string::npos || colon == 0 || colon + 1 >= line.size()) return false;
+    host = line.substr(0, colon);
+    if(host.size() >= 2 && host.front() == '[' && host.back() == ']') host = host.substr(1, host.size() - 2);
+    int v = 0;
+    for(size_t i = colon + 1; i < line.size(); i++){
+        if(line[i] < '0' || line[i] > '9') return false;
+        v = v * 10 + (line[i] - '0');
+        if(v > 65535) return false;
+    }
+    if(v <= 0) return false;
+    port = (uint16_t)v;
+    return true;
+}
+
+std::vector<Addr> loadRelayCache(){
+    std::vector<Addr> out;
+    std::lock_guard<std::mutex> g(g_cacheMu);
+    std::ifstream f(kRelayCacheFile);
+    std::string line;
+    while(std::getline(f, line) && out.size() < kRelayCacheMax){
+        while(!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        std::string host;
+        uint16_t port = 0;
+        if(!parseHostPort(line, host, port)) continue;
+        std::vector<Addr> a;
+        std::string e;
+        if(resolve(host, port, a, e) && !a.empty()) out.push_back(a[0]);
+    }
+    return out;
+}
+
+void saveRelayCache(const std::vector<Addr>& v){
+    std::lock_guard<std::mutex> g(g_cacheMu);
+    std::string tmp = std::string(kRelayCacheFile) + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::trunc);
+        for(const Addr& a : v) f << a.str() << '\n';
+        if(!f) return;
+    }
+    replaceFile(tmp, kRelayCacheFile);
+}
+
+bool probeRelay(const Addr& a, uint8_t pub[32]){
+    UdpSocket s;
+    std::string err;
+    if(!s.open(a.family(), 0, err)) return false;
+    uint8_t req[kKeyReqLen] = {0};
+    writeHeader(req, PacketType::Link, Lane::Signal);
+    req[kHeaderLen] = kKeyReq;
+    for(int t = 0; t < 2; t++){
+        s.sendTo(req, sizeof req, a);
+        uint32_t until = nowMs() + 800;
+        while((int32_t)(nowMs() - until) < 0){
+            uint8_t in[kMaxPacket];
+            Addr from;
+            int r = s.recvFrom(in, sizeof in, from, 200);
+            if(r >= (int)(kHeaderLen + 1 + 32) && from == a && in[kHeaderLen] == kKeyRep){
+                std::memcpy(pub, in + kHeaderLen + 1, 32);
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 uint64_t nextSeq(){
@@ -230,6 +308,23 @@ void RelayLink::dispatch(int ci, const uint8_t* p, size_t n){
         waitCv_.notify_all();
         return;
     }
+    if(kind == kRelayListReply){
+        if(n < 2) return;
+        size_t cnt = p[1];
+        if(cnt > 8 || n < 2 + cnt * 51) return;
+        std::vector<Addr> fresh;
+        for(size_t i = 0; i < cnt; i++){
+            Addr a;
+            if(decodeAddr(p + 2 + i * 51, a)) fresh.push_back(a);
+        }
+        std::vector<Addr> merged = fresh;
+        for(const Addr& old : loadRelayCache()){
+            if(merged.size() >= kRelayCacheMax) break;
+            if(std::find(merged.begin(), merged.end(), old) == merged.end()) merged.push_back(old);
+        }
+        saveRelayCache(merged);
+        return;
+    }
     if(n < 9) return;
     uint64_t c = getU64(p + 1);
     if(kind == kData){
@@ -390,7 +485,19 @@ void RelayLink::ctlLoop(){
         return;
     }
     std::vector<Addr> use;
-    for(const Addr& a : seeds) if(a.family() == familyV4()) use.push_back(a);
+    {
+        std::vector<std::array<uint8_t, 32>> seen;
+        for(const Addr& a : loadRelayCache()){
+            if(use.size() >= (size_t)kConns) break;
+            if(std::find(seeds.begin(), seeds.end(), a) != seeds.end()) continue;
+            std::array<uint8_t, 32> pk;
+            if(!probeRelay(a, pk.data())) continue;
+            if(std::find(seen.begin(), seen.end(), pk) != seen.end()) continue;
+            seen.push_back(pk);
+            use.push_back(a);
+        }
+    }
+    for(const Addr& a : seeds) if(a.family() == familyV4() && use.size() < (size_t)kConns && std::find(use.begin(), use.end(), a) == use.end()) use.push_back(a);
     if(use.empty()) use = seeds;
     for(int i = 0; i < kConns && i < (int)use.size(); i++){
         Conn& k = conns_[i];
@@ -421,6 +528,7 @@ void RelayLink::ctlLoop(){
                     retryAt[i] = 0;
                     lastPing[i] = lastPublish[i] = nowMs();
                     k.ready = true;
+                    sendControl(i, kRelayList, nullptr, 0);
                     for(int j = 0; j < kConns; j++) if(conns_[j].ready){ std::string pe; publish(j, pe); lastPublish[j] = nowMs(); }
                 } else {
                     k.ready = false;

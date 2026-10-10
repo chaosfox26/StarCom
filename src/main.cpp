@@ -49,6 +49,7 @@ static int usage(){
         "  starcom call @name         the same, and ring your friend straight away (use headphones)\n"
         "  starcom hub                your hubs in the console: create, join, talk, voice channels\n"
         "  starcom volunteer [on|off|run]  help carry other people's encrypted messages (off by default)\n"
+        "  starcom volunteer relay <port>  run a relay that other people can use (publishes your IP address)\n"
         "  starcom id                 show your friend code\n"
         "  starcom probe              show your hardware video encoders\n"
         "  starcom seed               look up this copy's network entry points\n"
@@ -241,7 +242,7 @@ static void markMet(const uint8_t pub[32]){
 
 static const char* VOLUNTEER_FILE = "volunteer.txt";
 
-static int cmdVolunteer(const std::string& arg){
+static int cmdVolunteer(const std::string& arg, const std::string& portArg = std::string()){
     const char* what = "Volunteering means carrying other people's encrypted messages while StarCom is open, using up to 2 Mbps of your upload.\n"
                        "You only pass along encrypted data you cannot read. Only the StarCom entry relays learn your IP address; other users never do.\n";
     if(arg == "on" || arg == "off"){
@@ -254,6 +255,17 @@ static int cmdVolunteer(const std::string& arg){
         if(!replaceFile(tmp, VOLUNTEER_FILE)){ std::fprintf(stderr, "could not save the setting\n"); return 1; }
         std::printf("Volunteering is now %s. It applies whenever the StarCom window or 'starcom hub' is open.\n%s", arg.c_str(), arg == "on" ? what : "");
         return 0;
+    }
+    if(arg == "relay"){
+        int port = portArg.empty() ? 0 : std::atoi(portArg.c_str());
+        if(port < 1 || port > 65535){ std::fprintf(stderr, "use: starcom volunteer relay <port>   (the UDP port must be reachable from the internet)\n"); return 1; }
+        std::printf("Running a relay for other people.\n"
+                    "- Your IP address becomes public: it is published so that other StarCom users can use this relay, and every user of it sees your address.\n"
+                    "- You carry other people's encrypted packets. You cannot read them, and nothing about users is stored or logged.\n"
+                    "- The relay has its own key (peer-relay.key), separate from your identity.\n"
+                    "- It only helps if the UDP port is open to the internet; the line below says whether it was found.\n");
+        std::fflush(stdout);
+        return runRelay((uint16_t)port, "peer-relay.key", true);
     }
     if(arg == "run"){
         consoleInit();
@@ -458,7 +470,7 @@ int main(int argc, char** argv){
     else if(cmd == "chat" && argc > 2) rc = cmdChatName(argv[2], false);
     else if(cmd == "call" && argc > 2) rc = cmdChatName(argv[2], true);
     else if(cmd == "hub") rc = runHubConsole();
-    else if(cmd == "volunteer") rc = cmdVolunteer(argc > 2 ? std::string(argv[2]) : std::string());
+    else if(cmd == "volunteer") rc = cmdVolunteer(argc > 2 ? std::string(argv[2]) : std::string(), argc > 3 ? std::string(argv[3]) : std::string());
     else if(cmd == "relay" && argc > 2) rc = runRelay((uint16_t)std::atoi(argv[2]));
     else rc = usage();
     netShutdown();

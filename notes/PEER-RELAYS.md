@@ -1,6 +1,6 @@
 # Peer-run relays and hidden paths
 
-Status: design draft. No code yet. Everything here is a plan; NETWORK.md and DATA.md describe what StarCom does today.
+Status: first slice built. A StarCom copy can run a relay for others (`starcom volunteer relay <port>`), entry relays check and list it, and clients learn the list in one run and use volunteer relays in the next. Because a conversation already goes through one relay on each side, this alone makes the default path run through ordinary users' relays. Not built yet: switching to another relay while running, guards, a directory that does not rely on the entry relays, the hidden path with more than one relay per side, direct connections for friends, and padding. NETWORK.md and DATA.md describe what StarCom does today.
 
 ## 1. Decisions (from the owner)
 1. **Peer-run relays are acceptable.** The aim is that no dedicated server is needed: ordinary StarCom users can carry other people's traffic.
