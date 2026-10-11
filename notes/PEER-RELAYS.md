@@ -1,6 +1,6 @@
 # Peer-run relays and hidden paths
 
-Status: first slice built. A StarCom copy can run a relay for others (`starcom volunteer relay <port>`), entry relays check and list it, and clients learn the list in one run and use volunteer relays in the next. Because a conversation already goes through one relay on each side, this alone makes the default path run through ordinary users' relays. Not built yet: switching to another relay while running, guards, a directory that does not rely on the entry relays, the hidden path with more than one relay per side, direct connections for friends, and padding. NETWORK.md and DATA.md describe what StarCom does today.
+Status: first slice built. A StarCom copy can run a relay for others (`starcom volunteer relay <port>`), entry relays check and list it, and clients learn the list in one run and use volunteer relays in the next. Because a conversation already goes through one relay on each side, this alone makes the default path run through ordinary users' relays. Switching to another relay while running and guards (the oldest saved relays stay first; a relay is dropped only after three failed starts in a row) are built. Not built yet: a directory that does not rely on the entry relays, the hidden path with more than one relay per side, direct connections for friends, and padding. NETWORK.md and DATA.md describe what StarCom does today.
 
 ## 1. Decisions (from the owner)
 1. **Peer-run relays are acceptable.** The aim is that no dedicated server is needed: ordinary StarCom users can carry other people's traffic.
@@ -60,7 +60,7 @@ Ways 3 and 4 together are what gets built first.
 1. This document, and the owner's answers to section 8.
 2. A StarCom that volunteers also accepts incoming relay links and publishes its description. Tested here with several copies on one machine.
 3. Hop-by-hop path building with layered encryption and a meeting relay. Tested on one machine with five or more copies.
-4. Guard choice and relay selection rules (different networks, never yourself, never the same relay twice).
+4. Guard choice and relay selection rules. Built: oldest-first stickiness, strikes, never the same relay twice. Not built: different networks, expiring a guard after weeks.
 5. The direct path for friends: encrypted address exchange, hole punching, switching and falling back. Real routers cannot be reproduced in the test setup here, so this is tested on one machine and needs real-world testing by people.
 6. Take the dedicated relays out of the path, keeping them only as the first-contact entry points.
 7. Padding policy.

@@ -34,7 +34,7 @@ StarCom is built with AI, openly (see README.md). This early prototype does dire
 ## Running a relay for others (optional, command line)
 - `starcom volunteer relay 47010` runs a relay on UDP port 47010 that other people can use. It tells you plainly that your IP address becomes public. It prints `listed by 1 of 1 entry points` once an entry relay has checked that the port answers from outside; `listed by 0` means nobody can find it yet (usually a closed port or a router that needs a port forward).
 - Its key is kept in `peer-relay.key`, separate from your identity.
-- StarCom copies that start afterwards learn about it from their relay, save it in `relays.txt` and use it the next time they start.
+- StarCom copies that start afterwards learn about it from their relay, save it in `relays.txt` and use it the next time they start. `tools/guards-test.sh` checks that relays already saved stay in front of newly listed ones and that a dead relay is only dropped on its third failed start.
 
 ## Command line (Windows and Linux)
 - Choose your @name once:

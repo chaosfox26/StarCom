@@ -24,6 +24,7 @@ const uint8_t kKeyReq = 1, kKeyRep = 2;
 const uint8_t kRelayList = 20, kRelayListReply = 21;
 const char* kRelayCacheFile = "relays.txt";
 const size_t kRelayCacheMax = 16;
+const int kGuardStrikes = 3;
 const uint8_t kOpenMasked = 1;
 const size_t kKeyReqLen = 64;
 
@@ -73,33 +74,58 @@ bool parseHostPort(const std::string& line, std::string& host, uint16_t& port){
     return true;
 }
 
-std::vector<Addr> loadRelayCache(){
-    std::vector<Addr> out;
+struct CacheEntry {
+    Addr addr;
+    int strikes = 0;
+};
+
+std::vector<CacheEntry> loadRelayEntries(){
+    std::vector<CacheEntry> out;
     std::lock_guard<std::mutex> g(g_cacheMu);
     std::ifstream f(kRelayCacheFile);
     std::string line;
     while(std::getline(f, line) && out.size() < kRelayCacheMax){
         while(!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        int strikes = 0;
+        size_t sp = line.find(' ');
+        if(sp != std::string::npos){
+            std::string tail = line.substr(sp + 1);
+            line.resize(sp);
+            if(tail.size() == 1 && tail[0] >= '0' && tail[0] <= '9') strikes = tail[0] - '0';
+        }
         std::string host;
         uint16_t port = 0;
         if(!parseHostPort(line, host, port) || !numericHost(host)) continue;
         std::vector<Addr> a;
         std::string e;
-        if(resolve(host, port, a, e) && !a.empty() && plausibleRelay(a[0])) out.push_back(a[0]);
+        if(!resolve(host, port, a, e) || a.empty() || !plausibleRelay(a[0])) continue;
+        bool dup = false;
+        for(const CacheEntry& c : out) if(c.addr == a[0]) dup = true;
+        if(dup) continue;
+        CacheEntry c;
+        c.addr = a[0];
+        c.strikes = strikes;
+        out.push_back(c);
     }
     return out;
 }
 
-void saveRelayCache(const std::vector<Addr>& v){
+void saveRelayEntries(const std::vector<CacheEntry>& v){
     std::lock_guard<std::mutex> g(g_cacheMu);
     std::string tmp = std::string(kRelayCacheFile) + ".tmp";
     {
         std::ofstream f(tmp, std::ios::trunc);
-        for(const Addr& a : v) f << a.str() << '\n';
+        for(const CacheEntry& c : v) f << c.addr.str() << ' ' << c.strikes << '\n';
         f.flush();
         if(!f) return;
     }
     replaceFile(tmp, kRelayCacheFile);
+}
+
+std::vector<Addr> loadRelayCache(){
+    std::vector<Addr> out;
+    for(const CacheEntry& c : loadRelayEntries()) out.push_back(c.addr);
+    return out;
 }
 
 bool probeRelay(const Addr& a, uint8_t pub[32]){
@@ -384,12 +410,17 @@ void RelayLink::dispatch(int ci, const uint8_t* p, size_t n){
             if(!decodeAddr(p + 2 + i * 51, a) || !plausibleRelay(a)) continue;
             if(std::find(fresh.begin(), fresh.end(), a) == fresh.end()) fresh.push_back(a);
         }
-        std::vector<Addr> merged = fresh;
-        for(const Addr& old : loadRelayCache()){
+        std::vector<CacheEntry> merged = loadRelayEntries();
+        for(const Addr& a : fresh){
             if(merged.size() >= kRelayCacheMax) break;
-            if(std::find(merged.begin(), merged.end(), old) == merged.end()) merged.push_back(old);
+            bool have = false;
+            for(const CacheEntry& c : merged) if(c.addr == a) have = true;
+            if(have) continue;
+            CacheEntry c;
+            c.addr = a;
+            merged.push_back(c);
         }
-        saveRelayCache(merged);
+        saveRelayEntries(merged);
         return;
     }
     if(n < 9) return;
@@ -588,32 +619,42 @@ void RelayLink::ctlLoop(){
     seedList_ = seeds;
     std::vector<Addr> use;
     {
-        std::vector<Addr> cache = loadRelayCache();
-        std::vector<Addr> keep;
+        std::vector<CacheEntry> cache = loadRelayEntries();
+        std::vector<CacheEntry> keep;
         std::vector<std::array<uint8_t, 32>> seen;
         size_t idx = 0;
+        bool changed = false;
         while(idx < cache.size() && use.size() < (size_t)kConns && !quit_){
             std::vector<Probed> batch;
+            std::vector<size_t> at;
             for(; idx < cache.size() && batch.size() < 4; idx++){
-                if(std::find(seeds.begin(), seeds.end(), cache[idx]) != seeds.end()) continue;
+                if(std::find(seeds.begin(), seeds.end(), cache[idx].addr) != seeds.end()){ keep.push_back(cache[idx]); continue; }
                 Probed pr;
-                pr.addr = cache[idx];
+                pr.addr = cache[idx].addr;
                 pr.pub.fill(0);
                 batch.push_back(pr);
+                at.push_back(idx);
             }
             if(batch.empty()) break;
             probeBatch(batch);
-            for(Probed& pr : batch){
-                if(!pr.alive) continue;
-                keep.push_back(pr.addr);
-                if(use.size() >= (size_t)kConns) continue;
-                if(std::find(seen.begin(), seen.end(), pr.pub) != seen.end()) continue;
-                seen.push_back(pr.pub);
-                use.push_back(pr.addr);
+            for(size_t b = 0; b < batch.size(); b++){
+                Probed& pr = batch[b];
+                CacheEntry c = cache[at[b]];
+                if(pr.alive){
+                    if(c.strikes){ c.strikes = 0; changed = true; }
+                    keep.push_back(c);
+                    if(use.size() >= (size_t)kConns) continue;
+                    if(std::find(seen.begin(), seen.end(), pr.pub) != seen.end()) continue;
+                    seen.push_back(pr.pub);
+                    use.push_back(pr.addr);
+                } else {
+                    changed = true;
+                    if(++c.strikes < kGuardStrikes) keep.push_back(c);
+                }
             }
         }
         for(; idx < cache.size(); idx++) keep.push_back(cache[idx]);
-        if(keep.size() != cache.size()) saveRelayCache(keep);
+        if(changed) saveRelayEntries(keep);
     }
     for(const Addr& a : seeds) if(a.family() == familyV4() && use.size() < (size_t)kConns && std::find(use.begin(), use.end(), a) == use.end()) use.push_back(a);
     if(use.empty()) use = seeds;
